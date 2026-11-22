@@ -1,0 +1,103 @@
+[gd_scene format=3 uid="uid://clmcdocutm02t"]
+
+[ext_resource type="Script" uid="uid://bskjukolgrsow" path="res://main_editor.gd" id="1_up0xs"]
+[ext_resource type="Texture2D" uid="uid://b3wwlx57ql0fk" path="res://icon_add_node.tres" id="2_xyjpv"]
+
+[node name="MainEditor" type="Control" unique_id=1945972650]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_up0xs")
+
+[node name="RootLayout" type="VBoxContainer" parent="." unique_id=1621743405]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ToolbarPanel" type="PanelContainer" parent="RootLayout" unique_id=2124040487]
+layout_mode = 2
+
+[node name="MainSplit" type="HSplitContainer" parent="RootLayout" unique_id=1247549743]
+layout_mode = 2
+size_flags_vertical = 3
+split_offsets = PackedInt32Array(220, 0)
+split_offset = 220
+
+[node name="NodeListPanel" type="PanelContainer" parent="RootLayout/MainSplit" unique_id=1142327223]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="RootLayout/MainSplit/NodeListPanel" unique_id=1146790509]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="RootLayout/MainSplit/NodeListPanel/VBoxContainer" unique_id=1958011832]
+layout_mode = 2
+text = "Ноды"
+horizontal_alignment = 1
+
+[node name="NodeList" type="ItemList" parent="RootLayout/MainSplit/NodeListPanel/VBoxContainer" unique_id=794803592]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Workspace" type="Panel" parent="RootLayout/MainSplit" unique_id=1122901469]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="GraphEdit" type="GraphEdit" parent="RootLayout/MainSplit/Workspace" unique_id=1382893510]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+show_zoom_label = true
+
+[node name="ToolbarButtons" type="HBoxContainer" parent="RootLayout/MainSplit/Workspace" unique_id=1598207386]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -271.0
+offset_bottom = 64.0
+grow_horizontal = 0
+
+[node name="AddNodeButton" type="TextureButton" parent="RootLayout/MainSplit/Workspace/ToolbarButtons" unique_id=271622316]
+custom_minimum_size = Vector2(64, 64)
+layout_mode = 2
+toggle_mode = true
+texture_normal = ExtResource("2_xyjpv")
+ignore_texture_size = true
+stretch_mode = 5
+
+[node name="VSeparator" type="VSeparator" parent="RootLayout/MainSplit/Workspace/ToolbarButtons" unique_id=1024978243]
+custom_minimum_size = Vector2(10, 0)
+layout_mode = 2
+
+[node name="SaveButton" type="Button" parent="RootLayout/MainSplit/Workspace/ToolbarButtons" unique_id=1022832056]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Save"
+
+[node name="VSeparator2" type="VSeparator" parent="RootLayout/MainSplit/Workspace/ToolbarButtons" unique_id=1106600180]
+custom_minimum_size = Vector2(10, 0)
+layout_mode = 2
+
+[node name="LoadButton" type="Button" parent="RootLayout/MainSplit/Workspace/ToolbarButtons" unique_id=117142776]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Load"
+
+[node name="VSeparator3" type="VSeparator" parent="RootLayout/MainSplit/Workspace/ToolbarButtons" unique_id=1742220255]
+custom_minimum_size = Vector2(10, 0)
+layout_mode = 2
+
+[node name="DeleteButton" type="Button" parent="RootLayout/MainSplit/Workspace/ToolbarButtons" unique_id=1472163052]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Delete"

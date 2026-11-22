@@ -1,0 +1,44 @@
+[gd_scene format=3 uid="uid://c8a66f0y13ta6"]
+
+[ext_resource type="Script" uid="uid://bjk4vur5hjyq8" path="res://planet.gd" id="1_ig7tw"]
+[ext_resource type="Script" uid="uid://cnqi4mrejmd3k" path="res://player.gd" id="2_0xm2m"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_38sbo"]
+radius = 0.35
+height = 1.4
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_5vmv2"]
+
+[sub_resource type="Environment" id="Environment_5vmv2"]
+background_mode = 1
+background_color = Color(0.03137255, 0.050980393, 0.09411765, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.20784314, 0.2509804, 0.32156864, 1)
+ambient_light_energy = 0.8
+
+[node name="Main" type="Node3D" unique_id=1964675748]
+
+[node name="Planet" type="StaticBody3D" parent="." unique_id=540945019]
+script = ExtResource("1_ig7tw")
+
+[node name="Player" type="CharacterBody3D" parent="." unique_id=1269606711 node_paths=PackedStringArray("planet")]
+floor_snap_length = 0.3
+script = ExtResource("2_0xm2m")
+planet = NodePath("../Planet")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=1531004803]
+shape = SubResource("CapsuleShape3D_38sbo")
+
+[node name="Visual" type="MeshInstance3D" parent="Player" unique_id=627536484]
+transform = Transform3D(0.7, 0, 0, 0, 1.4, 0, 0, 0, 0.7, 0, 0, 0)
+mesh = SubResource("CapsuleMesh_5vmv2")
+
+[node name="CameraPivot" type="Node3D" parent="Player" unique_id=1606310051]
+
+[node name="Camera3D" type="Camera3D" parent="Player/CameraPivot" unique_id=1104838812]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 5)
+fov = 70.0
+size = 44.0
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1901167807]
+environment = SubResource("Environment_5vmv2")

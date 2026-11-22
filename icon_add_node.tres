@@ -1,0 +1,7 @@
+[gd_resource type="AtlasTexture" format=3 uid="uid://b3wwlx57ql0fk"]
+
+[ext_resource type="Texture2D" uid="uid://bnipyjativ323" path="res://Minimalist Black Utility Icon Grid.png" id="1_uo3n0"]
+
+[resource]
+atlas = ExtResource("1_uo3n0")
+region = Rect2(288, 768, 218, 186)
