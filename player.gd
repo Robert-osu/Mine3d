@@ -26,6 +26,7 @@ extends CharacterBody3D
 var vertical_speed := 0.0
 var heading := Vector3.FORWARD
 var mining_requested := false
+var spawn_ready := false
 
 
 func _ready() -> void:
@@ -41,8 +42,19 @@ func _ready() -> void:
 
     # Радиус планеты + небольшой запас над поверхностью.
     var spawn_distance := planet.RADIUS + 2.0
+    
+    var direction := Vector3.UP
 
-    global_position = center + spawn_direction * spawn_distance
+    var surface_point := center + direction * (planet.RADIUS - 0.5)
+
+    global_position = center + direction * (planet.RADIUS + 3.0)
+
+    planet.update_streaming(global_position)
+
+    while not planet.has_collision_at(surface_point):
+        await get_tree().process_frame
+
+    spawn_ready = true
 
     heading = Vector3.FORWARD.slide(spawn_direction).normalized()
 
@@ -118,10 +130,13 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
+    if not spawn_ready:
+        return
+
     if planet == null:
         return
 
-    var center := planet.to_global(Vector3(planet.SIZE / 2.0, planet.SIZE / 2.0, planet.SIZE / 2.0))
+    var center := planet.to_global(planet.get_planet_center())
     var up := (global_position - center).normalized()
 
     up_direction = up
@@ -146,6 +161,8 @@ func _physics_process(delta: float) -> void:
         camera_right * input.x
         + camera_forward * -input.y
     ).normalized()
+
+    
 
     var horizontal_velocity := velocity.slide(up)
 
