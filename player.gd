@@ -33,11 +33,9 @@ func _ready() -> void:
         push_error("Assign Planet in Player Inspector!")
         return
 
-    var center := planet.to_global(Vector3(
-        planet.SIZE / 2.0,
-        planet.SIZE / 2.0,
-        planet.SIZE / 2.0
-    ))
+    planet.update_streaming(global_position)
+
+    var center := planet.to_global(planet.get_planet_center())
 
     var spawn_direction := Vector3.UP
 
@@ -174,6 +172,8 @@ func _physics_process(delta: float) -> void:
     velocity = horizontal_velocity + up * vertical_speed
 
     move_and_slide()
+
+    planet.update_streaming(global_position)
 
     vertical_speed = velocity.dot(up)
 

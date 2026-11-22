@@ -2,36 +2,57 @@
 extends StaticBody3D
 class_name Planet
 
+@export_group("Planet")
+@export_range(1, 1000) var planet_scale := 5
+
+@export_group("Chunks")
+@export_range(1, 4) var load_radius := 1
+
 @export_group("Visual")
-@export_range(0.0, 1.0) var smoothness := 0.8
+@export_range(0.0, 1.0) var smoothness := 0.0
 
-const k_size = 5
-
-const SIZE := 32 * k_size
-const RADIUS := 14.0 * k_size
+const CHUNK_SIZE := 32
 const BLOCK_SIZE := 1.0
-const CHUNK_SIZE := 8
 
-var blocks := PackedByteArray()
+var SIZE: int
+var RADIUS: float
+
 var chunks: Dictionary = {}
+var destroyed_blocks: Dictionary = {}
+
 var terrain_material: StandardMaterial3D
+var last_center_chunk := Vector3i(-999999, -999999, -999999)
+
+
 
 
 func _ready() -> void:
-    blocks.resize(SIZE * SIZE * SIZE)
+    SIZE = 32 * planet_scale
+    RADIUS = 14.0 * planet_scale
 
     terrain_material = StandardMaterial3D.new()
     terrain_material.albedo_color = Color("#8b765e")
     terrain_material.roughness = 1.0
     terrain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-    generate_planet()
-    generate_chunks()
+    print("Planet initialized. Size: ", SIZE, " Radius: ", RADIUS)
 
 
-func index_of(x: int, y: int, z: int) -> int:
-    return x + SIZE * (y + SIZE * z)
+func get_planet_center() -> Vector3:
+    return Vector3(SIZE, SIZE, SIZE) * 0.5
 
+
+func index_to_chunk(cell: Vector3i) -> Vector3i:
+    return Vector3i(
+        floori(float(cell.x) / CHUNK_SIZE),
+        floori(float(cell.y) / CHUNK_SIZE),
+        floori(float(cell.z) / CHUNK_SIZE)
+    )
+
+
+# --------------------------------------------------
+# BLOCK STORAGE
+# --------------------------------------------------
 
 func is_solid(x: int, y: int, z: int) -> bool:
     if x < 0 or x >= SIZE:
@@ -41,45 +62,182 @@ func is_solid(x: int, y: int, z: int) -> bool:
     if z < 0 or z >= SIZE:
         return false
 
-    return blocks[index_of(x, y, z)] == 1
+    var cell := Vector3i(x, y, z)
+
+    if destroyed_blocks.has(cell):
+        return false
+
+    var center := get_planet_center()
+    var block_center := Vector3(x, y, z) + Vector3.ONE * 0.5
+
+    return block_center.distance_squared_to(center) <= RADIUS * RADIUS
 
 
-func generate_planet() -> void:
-    var center := Vector3(SIZE, SIZE, SIZE) * 0.5
+func destroy_block(cell: Vector3i) -> bool:
+    if not is_solid(cell.x, cell.y, cell.z):
+        return false
 
-    for z in range(SIZE):
-        for y in range(SIZE):
-            for x in range(SIZE):
-                var pos := Vector3(x, y, z) + Vector3.ONE * 0.5
+    destroyed_blocks[cell] = true
 
-                if pos.distance_to(center) <= RADIUS:
-                    blocks[index_of(x, y, z)] = 1
+    var chunk_key := index_to_chunk(cell)
+
+    # Перестраиваем основной чанк.
+    rebuild_if_loaded(chunk_key)
+
+    # Перестраиваем соседей, если блок находился на границе.
+    var local := Vector3i(
+        cell.x % CHUNK_SIZE,
+        cell.y % CHUNK_SIZE,
+        cell.z % CHUNK_SIZE
+    )
+
+    if local.x == 0:
+        rebuild_if_loaded(chunk_key + Vector3i(-1, 0, 0))
+    elif local.x == CHUNK_SIZE - 1:
+        rebuild_if_loaded(chunk_key + Vector3i(1, 0, 0))
+
+    if local.y == 0:
+        rebuild_if_loaded(chunk_key + Vector3i(0, -1, 0))
+    elif local.y == CHUNK_SIZE - 1:
+        rebuild_if_loaded(chunk_key + Vector3i(0, 1, 0))
+
+    if local.z == 0:
+        rebuild_if_loaded(chunk_key + Vector3i(0, 0, -1))
+    elif local.z == CHUNK_SIZE - 1:
+        rebuild_if_loaded(chunk_key + Vector3i(0, 0, 1))
+
+    return true
+
+
+func rebuild_if_loaded(key: Vector3i) -> void:
+    if chunks.has(key):
+        rebuild_chunk(key)
 
 
 # --------------------------------------------------
-# CHUNKS
+# CHUNK STREAMING
 # --------------------------------------------------
 
-func generate_chunks() -> void:
-    for z in range(SIZE / CHUNK_SIZE):
-        for y in range(SIZE / CHUNK_SIZE):
-            for x in range(SIZE / CHUNK_SIZE):
-                rebuild_chunk(Vector3i(x, y, z))
+func update_streaming(world_position: Vector3) -> void:
+    var local_position := to_local(world_position)
 
+    var center_chunk := Vector3i(
+        floori(local_position.x / CHUNK_SIZE),
+        floori(local_position.y / CHUNK_SIZE),
+        floori(local_position.z / CHUNK_SIZE)
+    )
 
-func rebuild_chunk(key: Vector3i) -> void:
-    if (
-        key.x < 0 or key.x >= SIZE / CHUNK_SIZE
-        or key.y < 0 or key.y >= SIZE / CHUNK_SIZE
-        or key.z < 0 or key.z >= SIZE / CHUNK_SIZE
-    ):
+    # Не обновляем чанки, если игрок остался в том же чанке.
+    if center_chunk == last_center_chunk:
         return
 
-    var chunk_origin := Vector3(
+    last_center_chunk = center_chunk
+
+    var required_chunks: Dictionary = {}
+
+    # Загружаем чанки вокруг игрока.
+    for z in range(-load_radius, load_radius + 1):
+        for y in range(-load_radius, load_radius + 1):
+            for x in range(-load_radius, load_radius + 1):
+
+                var key := center_chunk + Vector3i(x, y, z)
+
+                if not is_valid_chunk(key):
+                    continue
+
+                if not chunk_intersects_planet(key):
+                    continue
+
+                required_chunks[key] = true
+
+                if not chunks.has(key):
+                    create_chunk(key)
+
+    # Выгружаем чанки, которые больше не нужны.
+    var loaded_keys := chunks.keys()
+
+    for key in loaded_keys:
+        if not required_chunks.has(key):
+            unload_chunk(key)
+
+    print("Loaded chunks: ", chunks.size())
+
+
+func is_valid_chunk(key: Vector3i) -> bool:
+    var max_chunks := ceili(float(SIZE) / CHUNK_SIZE)
+
+    return (
+        key.x >= 0 and key.x < max_chunks
+        and key.y >= 0 and key.y < max_chunks
+        and key.z >= 0 and key.z < max_chunks
+    )
+
+
+func chunk_intersects_planet(key: Vector3i) -> bool:
+    var chunk_min := Vector3(
         key.x * CHUNK_SIZE,
         key.y * CHUNK_SIZE,
         key.z * CHUNK_SIZE
     )
+
+    var chunk_max := chunk_min + Vector3.ONE * CHUNK_SIZE
+
+    var closest := get_planet_center().clamp(
+        chunk_min,
+        chunk_max
+    )
+
+    return closest.distance_to(get_planet_center()) <= RADIUS + 1.0
+
+
+func create_chunk(key: Vector3i) -> void:
+    var root := Node3D.new()
+    root.name = "Chunk_%d_%d_%d" % [key.x, key.y, key.z]
+
+    root.position = Vector3(
+        key.x * CHUNK_SIZE,
+        key.y * CHUNK_SIZE,
+        key.z * CHUNK_SIZE
+    )
+
+    add_child(root)
+
+    var mesh_instance := MeshInstance3D.new()
+    root.add_child(mesh_instance)
+
+    var body := StaticBody3D.new()
+    root.add_child(body)
+
+    var collision := CollisionShape3D.new()
+    body.add_child(collision)
+
+    chunks[key] = {
+        "root": root,
+        "mesh": mesh_instance,
+        "collision": collision
+    }
+
+    rebuild_chunk(key)
+
+
+func unload_chunk(key: Vector3i) -> void:
+    if not chunks.has(key):
+        return
+
+    var data: Dictionary = chunks[key]
+    var root: Node3D = data["root"]
+
+    root.queue_free()
+    chunks.erase(key)
+
+
+# --------------------------------------------------
+# CHUNK MESH
+# --------------------------------------------------
+
+func rebuild_chunk(key: Vector3i) -> void:
+    if not chunks.has(key):
+        return
 
     var vertices := PackedVector3Array()
     var normals := PackedVector3Array()
@@ -150,33 +308,9 @@ func rebuild_chunk(key: Vector3i) -> void:
                     for j in range(6):
                         normals.append(normal)
 
-    # Получаем или создаём объекты чанка.
-    var data: Dictionary
-
-    if chunks.has(key):
-        data = chunks[key]
-    else:
-        var root := Node3D.new()
-        root.name = "Chunk_%d_%d_%d" % [key.x, key.y, key.z]
-        root.position = chunk_origin
-        add_child(root)
-
-        var mesh_instance := MeshInstance3D.new()
-        root.add_child(mesh_instance)
-
-        var body := StaticBody3D.new()
-        root.add_child(body)
-
-        var collision := CollisionShape3D.new()
-        body.add_child(collision)
-
-        data = {
-            "root": root,
-            "mesh": mesh_instance,
-            "collision": collision
-        }
-
-        chunks[key] = data
+    var data: Dictionary = chunks[key]
+    var mesh_instance: MeshInstance3D = data["mesh"]
+    var collision: CollisionShape3D = data["collision"]
 
     var new_mesh := ArrayMesh.new()
 
@@ -195,60 +329,15 @@ func rebuild_chunk(key: Vector3i) -> void:
         new_mesh.surface_set_material(0, terrain_material)
 
         var shape := new_mesh.create_trimesh_shape()
-
-        data["collision"].set_deferred("shape", shape)
+        collision.set_deferred("shape", shape)
     else:
-        data["collision"].set_deferred("shape", null)
+        collision.set_deferred("shape", null)
 
-    data["mesh"].mesh = new_mesh
-
-
-# --------------------------------------------------
-# BLOCK DESTRUCTION
-# --------------------------------------------------
-
-func destroy_block(cell: Vector3i) -> bool:
-    if not is_solid(cell.x, cell.y, cell.z):
-        return false
-
-    blocks[index_of(cell.x, cell.y, cell.z)] = 0
-
-    var chunk_key := Vector3i(
-        cell.x / CHUNK_SIZE,
-        cell.y / CHUNK_SIZE,
-        cell.z / CHUNK_SIZE
-    )
-
-    # Перестраиваем основной чанк.
-    rebuild_chunk(chunk_key)
-
-    # Если блок был на границе, обновляем соседей.
-    var local := Vector3i(
-        cell.x % CHUNK_SIZE,
-        cell.y % CHUNK_SIZE,
-        cell.z % CHUNK_SIZE
-    )
-
-    if local.x == 0:
-        rebuild_chunk(chunk_key + Vector3i(-1, 0, 0))
-    elif local.x == CHUNK_SIZE - 1:
-        rebuild_chunk(chunk_key + Vector3i(1, 0, 0))
-
-    if local.y == 0:
-        rebuild_chunk(chunk_key + Vector3i(0, -1, 0))
-    elif local.y == CHUNK_SIZE - 1:
-        rebuild_chunk(chunk_key + Vector3i(0, 1, 0))
-
-    if local.z == 0:
-        rebuild_chunk(chunk_key + Vector3i(0, 0, -1))
-    elif local.z == CHUNK_SIZE - 1:
-        rebuild_chunk(chunk_key + Vector3i(0, 0, 1))
-
-    return true
+    mesh_instance.mesh = new_mesh
 
 
 # --------------------------------------------------
-# RAYCAST / MINING
+# MINING
 # --------------------------------------------------
 
 func get_cell(world_position: Vector3) -> Vector3i:
@@ -267,8 +356,8 @@ func mine(
     max_distance: float = 100.0
 ) -> bool:
 
-    # Переводим луч в локальные координаты планеты.
     var origin := to_local(ray_origin)
+
     var direction := (
         to_local(ray_origin + ray_direction.normalized()) - origin
     ).normalized()
@@ -306,7 +395,6 @@ func mine(
     var distance := 0.0
 
     while distance <= max_distance:
-
         if is_solid(cell.x, cell.y, cell.z):
             return destroy_block(cell)
 
@@ -326,15 +414,3 @@ func mine(
             cell.z += step.z
 
     return false
-
-
-func smooth_vertex(vertex: Vector3) -> Vector3:
-    var center := Vector3(SIZE, SIZE, SIZE) * 0.5
-
-    var direction := (vertex - center).normalized()
-
-    var radius := (vertex - center).length()
-
-    var target := center + direction * RADIUS
-
-    return vertex.lerp(target, smoothness)
