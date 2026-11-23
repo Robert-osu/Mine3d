@@ -183,13 +183,20 @@ func _physics_process(delta: float) -> void:
 
     velocity = horizontal_velocity + up * vertical_speed
 
-    # Проверяем чанк, в который собираемся переместиться.
-    var next_position := global_position + velocity * delta
+    # Проверяем готовность поверхности только рядом с землёй.
+    # В воздухе незагруженные чанки не должны останавливать игрока.
+    var altitude := global_position.distance_to(center) - planet.RADIUS
 
-    if not is_ground_area_ready(next_position, up):
-        horizontal_velocity = Vector3.ZERO
-        vertical_speed = 0.0
-        velocity = Vector3.ZERO
+    if altitude < 3.0 and vertical_speed < 0.0:
+        var ground_position := center + up * (planet.RADIUS - 0.5)
+
+        if not planet.is_chunk_ready_at(ground_position):
+            # Не даём провалиться сквозь ещё не загруженную поверхность.
+            # Горизонтальное движение при этом сохраняется.
+            vertical_speed = 0.0
+
+    velocity = horizontal_velocity + up * vertical_speed
+
 
 
     move_and_slide()
@@ -234,20 +241,3 @@ func mine_block() -> void:
         print("Block mined!")
     else:
         print("No block in reach!")
-
-func is_ground_area_ready(position: Vector3, up: Vector3) -> bool:
-    var check_distance := 1.5
-
-    var points := [
-        position - up * check_distance,
-        position - up * check_distance + global_basis.x * 0.4,
-        position - up * check_distance - global_basis.x * 0.4,
-        position - up * check_distance + global_basis.z * 0.4,
-        position - up * check_distance - global_basis.z * 0.4
-    ]
-
-    for point in points:
-        if not planet.is_chunk_ready_at(point):
-            return false
-
-    return true

@@ -6,6 +6,7 @@ class_name Planet
 
 @export_group("Chunks")
 @export_range(1, 8) var load_radius: int = 1
+@export_range(0, 16) var air_chunks_above: int = 1
 @export_range(1, 6) var unload_radius: int = 3
 @export_range(96, 2048) var blocks_per_frame: int = 512
 
@@ -602,28 +603,31 @@ func has_collision_at(world_position: Vector3) -> bool:
 # -----------------------------------------------------------------------------
 
 
+
 func update_streaming(world_position: Vector3) -> void:
+    # Переводим позицию игрока в локальные координаты планеты.
     var local_position := to_local(world_position)
-    var center := get_planet_center()
+    var planet_center := get_planet_center()
 
     # Направление от центра планеты к игроку.
-    var radial_direction := local_position - center
+    var radial_direction := local_position - planet_center
 
-    if radial_direction.length_squared() < 0.001:
+    if radial_direction.length_squared() < 0.0001:
         return
 
     radial_direction = radial_direction.normalized()
 
-    # Проецируем позицию игрока на поверхность сферы.
-    var surface_position := center + radial_direction * RADIUS
+    # Проецируем игрока на поверхность планеты.
+    var surface_position := planet_center + radial_direction * RADIUS
 
-    # Определяем центральный чанк по поверхности, а не по игроку.
+    # Определяем центральный чанк поверхности.
     var center_chunk := Vector3i(
         floori(surface_position.x / CHUNK_SIZE),
         floori(surface_position.y / CHUNK_SIZE),
         floori(surface_position.z / CHUNK_SIZE)
     )
 
+    # Обновляем область только при переходе в другой чанк.
     if center_chunk == last_center_chunk:
         return
 
@@ -631,7 +635,10 @@ func update_streaming(world_position: Vector3) -> void:
 
     var retained_chunks: Dictionary = {}
 
-    # Загружаем чанки вокруг проекции на поверхность.
+    # -------------------------------------------------
+    # 1. Загружаем чанки поверхности вокруг игрока.
+    # -------------------------------------------------
+
     for z in range(-load_radius, load_radius + 1):
         for y in range(-load_radius, load_radius + 1):
             for x in range(-load_radius, load_radius + 1):
@@ -648,7 +655,29 @@ func update_streaming(world_position: Vector3) -> void:
                 if not chunks.has(key):
                     create_chunk(key)
 
-    # Сохраняем уже загруженные чанки в дополнительном радиусе.
+    # -------------------------------------------------
+    # 2. Загружаем дополнительные чанки над поверхностью.
+    # -------------------------------------------------
+
+    for i in range(1, air_chunks_above + 1):
+        var above_chunk := center_chunk + Vector3i(
+            roundi(radial_direction.x * i),
+            roundi(radial_direction.y * i),
+            roundi(radial_direction.z * i)
+        )
+
+        if not is_valid_chunk(above_chunk):
+            continue
+
+        retained_chunks[above_chunk] = true
+
+        if not chunks.has(above_chunk):
+            create_chunk(above_chunk)
+
+    # -------------------------------------------------
+    # 3. Сохраняем уже загруженные чанки в радиусе выгрузки.
+    # -------------------------------------------------
+
     for z in range(-unload_radius, unload_radius + 1):
         for y in range(-unload_radius, unload_radius + 1):
             for x in range(-unload_radius, unload_radius + 1):
@@ -657,15 +686,17 @@ func update_streaming(world_position: Vector3) -> void:
                 if chunks.has(key):
                     retained_chunks[key] = true
 
-    # Выгружаем чанки вне области.
-    var loaded_keys := chunks.keys()
+    # -------------------------------------------------
+    # 4. Выгружаем чанки, которые больше не нужны.
+    # -------------------------------------------------
+
+    var loaded_keys: Array = chunks.keys()
 
     for key_variant in loaded_keys:
         var key: Vector3i = key_variant
 
         if not retained_chunks.has(key):
             unload_chunk(key)
-
 
 func is_valid_chunk(key: Vector3i) -> bool:
     var max_chunks: int = ceili(float(SIZE) / CHUNK_SIZE)
