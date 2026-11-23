@@ -20,7 +20,6 @@ ambient_light_energy = 0.8
 
 [node name="Planet" type="StaticBody3D" parent="." unique_id=540945019]
 script = ExtResource("1_ig7tw")
-planet_scale = 1000
 load_radius = 8
 
 [node name="Player" type="CharacterBody3D" parent="." unique_id=1269606711 node_paths=PackedStringArray("planet")]

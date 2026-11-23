@@ -601,13 +601,27 @@ func has_collision_at(world_position: Vector3) -> bool:
 # CHUNK STREAMING
 # -----------------------------------------------------------------------------
 
-func update_streaming(world_position: Vector3) -> void:
-    var local_position: Vector3 = to_local(world_position)
 
+func update_streaming(world_position: Vector3) -> void:
+    var local_position := to_local(world_position)
+    var center := get_planet_center()
+
+    # Направление от центра планеты к игроку.
+    var radial_direction := local_position - center
+
+    if radial_direction.length_squared() < 0.001:
+        return
+
+    radial_direction = radial_direction.normalized()
+
+    # Проецируем позицию игрока на поверхность сферы.
+    var surface_position := center + radial_direction * RADIUS
+
+    # Определяем центральный чанк по поверхности, а не по игроку.
     var center_chunk := Vector3i(
-        floori(local_position.x / CHUNK_SIZE),
-        floori(local_position.y / CHUNK_SIZE),
-        floori(local_position.z / CHUNK_SIZE)
+        floori(surface_position.x / CHUNK_SIZE),
+        floori(surface_position.y / CHUNK_SIZE),
+        floori(surface_position.z / CHUNK_SIZE)
     )
 
     if center_chunk == last_center_chunk:
@@ -617,7 +631,7 @@ func update_streaming(world_position: Vector3) -> void:
 
     var retained_chunks: Dictionary = {}
 
-    # Загружаем новые чанки в основном радиусе.
+    # Загружаем чанки вокруг проекции на поверхность.
     for z in range(-load_radius, load_radius + 1):
         for y in range(-load_radius, load_radius + 1):
             for x in range(-load_radius, load_radius + 1):
@@ -634,7 +648,7 @@ func update_streaming(world_position: Vector3) -> void:
                 if not chunks.has(key):
                     create_chunk(key)
 
-    # Сохраняем старые чанки в дополнительном радиусе.
+    # Сохраняем уже загруженные чанки в дополнительном радиусе.
     for z in range(-unload_radius, unload_radius + 1):
         for y in range(-unload_radius, unload_radius + 1):
             for x in range(-unload_radius, unload_radius + 1):
@@ -643,14 +657,15 @@ func update_streaming(world_position: Vector3) -> void:
                 if chunks.has(key):
                     retained_chunks[key] = true
 
-    # Выгружаем только чанки за пределами дополнительного радиуса.
-    var loaded_keys: Array = chunks.keys()
+    # Выгружаем чанки вне области.
+    var loaded_keys := chunks.keys()
 
     for key_variant in loaded_keys:
         var key: Vector3i = key_variant
 
         if not retained_chunks.has(key):
             unload_chunk(key)
+
 
 func is_valid_chunk(key: Vector3i) -> bool:
     var max_chunks: int = ceili(float(SIZE) / CHUNK_SIZE)
