@@ -4,9 +4,9 @@ extends CharacterBody3D
 @export var planet: Planet
 
 @export_group("Movement")
-@export var move_speed := 5.0
+@export var move_speed := 5.0 * 10
 @export var acceleration := 20.0
-@export var gravity := 20.0 / 3
+@export var gravity := 20.0 * 0.33
 @export var jump_force := 7.0 * 1.5
 
 @export_group("Camera")
@@ -34,15 +34,13 @@ func _ready() -> void:
         push_error("Assign Planet in Player Inspector!")
         return
 
-    planet.update_streaming(global_position)
-
     var center := planet.to_global(planet.get_planet_center())
 
     var spawn_direction := Vector3.UP
 
     # Радиус планеты + небольшой запас над поверхностью.
     var spawn_distance := planet.RADIUS + 2.0
-    
+
     var direction := Vector3.UP
 
     var surface_point := center + direction * (planet.RADIUS - 0.5)
@@ -178,17 +176,33 @@ func _physics_process(delta: float) -> void:
         )
 
     # Гравитация.
-    if is_on_floor():
-        vertical_speed = 0.0
-
-        if Input.is_action_just_pressed("jump"):
-            vertical_speed = jump_force
-    else:
+    if Input.is_action_just_pressed("jump") and is_on_floor():
+        vertical_speed = jump_force
+    elif not is_on_floor():
         vertical_speed -= gravity * delta
 
     velocity = horizontal_velocity + up * vertical_speed
 
+    # Проверяем чанк, в который собираемся переместиться.
+    var next_position := global_position + velocity * delta
+
+    if not is_ground_area_ready(next_position, up):
+        horizontal_velocity = Vector3.ZERO
+        vertical_speed = 0.0
+        velocity = Vector3.ZERO
+
+    var old_position := global_position
+
     move_and_slide()
+
+    var actual_delta := global_position - old_position
+
+    if actual_delta.length() > 1.0:
+        print("LARGE MOVEMENT: ", actual_delta)
+        print("VELOCITY: ", velocity)
+
+    if not is_on_floor() and vertical_speed < -1.0:
+        debug_ground_collision(up)
 
     planet.update_streaming(global_position)
 
@@ -230,3 +244,69 @@ func mine_block() -> void:
         print("Block mined!")
     else:
         print("No block in reach!")
+
+func is_ground_area_ready(position: Vector3, up: Vector3) -> bool:
+    var check_distance := 1.5
+
+    var points := [
+        position - up * check_distance,
+        position - up * check_distance + global_basis.x * 0.4,
+        position - up * check_distance - global_basis.x * 0.4,
+        position - up * check_distance + global_basis.z * 0.4,
+        position - up * check_distance - global_basis.z * 0.4
+    ]
+
+    for point in points:
+        if not planet.is_chunk_ready_at(point):
+            return false
+
+    return true
+
+func debug_ground_collision(up: Vector3) -> void:
+    var space := get_world_3d().direct_space_state
+
+    var query := PhysicsRayQueryParameters3D.create(
+        global_position - up * 0.3,
+        global_position - up * 3.0
+    )
+
+    query.collision_mask = collision_mask
+    query.exclude = [get_rid()]
+
+    var result := space.intersect_ray(query)
+
+    var hit := get_world_3d().direct_space_state.intersect_ray(query)
+
+    print(
+        "POS: ", global_position,
+        " | MASK: ", collision_mask,
+        " | LAYER: ", collision_layer,
+        " | FLOOR: ", is_on_floor(),
+        " | SLIDES: ", get_slide_collision_count()
+    )
+
+    if hit.is_empty():
+        print("GROUND RAY: NOTHING FOUND")
+    else:
+        var collider = hit["collider"]
+        print(
+            "GROUND RAY: HIT ",
+            collider.name,
+            " | COLLIDER LAYER: ", collider.collision_layer,
+            " | POINT: ", hit["position"]
+        )
+
+    if result.is_empty():
+        print("GROUND RAY: NOTHING FOUND")
+        var up_ := (global_position - planet.to_global(
+            planet.get_planet_center()
+        )).normalized()
+
+        planet.debug_chunk_at(global_position - up_ * 1.0)
+    else:
+        print(
+            "GROUND RAY: HIT ",
+            result.collider.name,
+            " at ",
+            result.position
+        )
