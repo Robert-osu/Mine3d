@@ -622,9 +622,9 @@ func update_streaming(world_position: Vector3) -> void:
 
     # Определяем центральный чанк поверхности.
     var center_chunk := Vector3i(
-        floori(surface_position.x / CHUNK_SIZE),
-        floori(surface_position.y / CHUNK_SIZE),
-        floori(surface_position.z / CHUNK_SIZE)
+        floori(local_position.x / CHUNK_SIZE),
+        floori(local_position.y / CHUNK_SIZE),
+        floori(local_position.z / CHUNK_SIZE)
     )
 
     # Обновляем область только при переходе в другой чанк.
@@ -717,40 +717,11 @@ func chunk_intersects_planet(key: Vector3i) -> bool:
     var chunk_max := chunk_min + Vector3.ONE * CHUNK_SIZE
     var center := get_planet_center()
 
-    # Ближайшая к центру точка чанка.
     var closest := center.clamp(chunk_min, chunk_max)
-
-    # Самая удалённая от центра точка чанка.
-    var farthest := Vector3(
-        maxf(
-            absf(center.x - chunk_min.x),
-            absf(center.x - chunk_max.x)
-        ),
-        maxf(
-            absf(center.y - chunk_min.y),
-            absf(center.y - chunk_max.y)
-        ),
-        maxf(
-            absf(center.z - chunk_min.z),
-            absf(center.z - chunk_max.z)
-        )
-    )
-
     var min_distance_squared := closest.distance_squared_to(center)
-    var max_distance_squared := farthest.length_squared()
 
     # Чанк должен пересекать объём планеты.
-    if min_distance_squared > RADIUS * RADIUS:
-        return false
-
-    # Чанк должен доходить до поверхности.
-    # Всё, что глубже одного блока под поверхностью, не загружаем.
-    var inner_radius := maxf(0.0, RADIUS - BLOCK_SIZE)
-
-    if max_distance_squared < inner_radius * inner_radius:
-        return false
-
-    return true
+    return min_distance_squared <= RADIUS * RADIUS
 
 
 func create_chunk(key: Vector3i) -> void:
