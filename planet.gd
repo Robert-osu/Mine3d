@@ -51,7 +51,6 @@ var chunks: Dictionary = {}
 var destroyed_blocks: Dictionary = {}
 
 var terrain_material: StandardMaterial3D
-var shared_block_shape: BoxShape3D
 var last_center_chunk := Vector3i(-999999, -999999, -999999)
 
 var chunk_queue: Array[Vector3i] = []
@@ -73,9 +72,6 @@ func _ready() -> void:
     terrain_material.albedo_color = terrain_color
     terrain_material.roughness = 1.0
     terrain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-    shared_block_shape = BoxShape3D.new()
-    shared_block_shape.size = Vector3.ONE * BLOCK_SIZE
 
     print("Planet initialized. Size: ", SIZE, " Radius: ", RADIUS)
 
@@ -203,6 +199,7 @@ func _is_solid_snapshot(
     return block_center.distance_squared_to(center) <= RADIUS * RADIUS
 
 
+
 func apply_completed_chunk_data() -> void:
     completed_mutex.lock()
     if completed_chunk_data.is_empty():
@@ -230,9 +227,9 @@ func apply_completed_chunk_data() -> void:
 
     chunk_data["pending_cells"] = result["visible_cells"]
     chunk_data["build_cursor"] = 0
+    chunk_data["mesh_vertices"] = PackedVector3Array()
+    chunk_data["mesh_normals"] = PackedVector3Array()
 
-
-# Создание узлов и коллизий выполняется постепенно в главном потоке.
 func process_pending_block_creation() -> void:
     var budget: int = blocks_per_frame
     var chunk_keys: Array = chunks.keys()
@@ -253,19 +250,28 @@ func process_pending_block_creation() -> void:
         var pending_cells: Array = chunk_data["pending_cells"]
         var cursor: int = int(chunk_data["build_cursor"])
 
+        var vertices: PackedVector3Array = chunk_data["mesh_vertices"]
+        var normals: PackedVector3Array = chunk_data["mesh_normals"]
+
         while cursor < pending_cells.size() and budget > 0:
             var cell: Vector3i = pending_cells[cursor]
             cursor += 1
             budget -= 1
 
-            # Состояние могло измениться после фонового сканирования.
-            create_block_visual(cell)
+            if is_solid(cell.x, cell.y, cell.z):
+                _append_cell_faces(cell, key, vertices, normals)
 
         chunk_data["build_cursor"] = cursor
+        chunk_data["mesh_vertices"] = vertices
+        chunk_data["mesh_normals"] = normals
+
         if cursor >= pending_cells.size():
             chunk_data.erase("pending_cells")
             chunk_data.erase("build_cursor")
+
+            _finish_chunk_geometry(key, vertices, normals)
             chunk_data["generated"] = true
+
 
 
 # -----------------------------------------------------------------------------
@@ -287,125 +293,150 @@ func is_block_visible(cell: Vector3i) -> bool:
     return false
 
 
-func create_block_visual(cell: Vector3i) -> void:
-    if not is_block_visible(cell):
-        return
+# -----------------------------------------------------------------------------
+# CHUNK MESH AND COLLISION
+# -----------------------------------------------------------------------------
 
-    var chunk_key: Vector3i = index_to_chunk(cell)
-    if not chunks.has(chunk_key):
-        return
-
-    var chunk_data: Dictionary = chunks[chunk_key]
-    var block_map: Dictionary = chunk_data["blocks"]
-    if block_map.has(cell):
-        return
-
-    var block_mesh: ArrayMesh = build_block_mesh(cell)
-    if block_mesh.get_surface_count() == 0:
-        return
-
-    var body := StaticBody3D.new()
-    body.name = "Block_%d_%d_%d" % [cell.x, cell.y, cell.z]
-
-    body.collision_layer = 1
-    body.collision_mask = 1
-
+func _append_cell_faces(
+    cell: Vector3i,
+    chunk_key: Vector3i,
+    vertices: PackedVector3Array,
+    normals: PackedVector3Array
+) -> void:
     var chunk_origin := Vector3(
         chunk_key.x * CHUNK_SIZE,
         chunk_key.y * CHUNK_SIZE,
         chunk_key.z * CHUNK_SIZE
     )
-    body.position = Vector3(cell) - chunk_origin + Vector3.ONE * 0.5
 
-    var mesh_instance := MeshInstance3D.new()
-    mesh_instance.name = "MeshInstance3D"
-    mesh_instance.mesh = block_mesh
-    body.add_child(mesh_instance)
-
-    var collision := CollisionShape3D.new()
-    collision.name = "CollisionShape3D"
-    collision.shape = shared_block_shape
-    collision.disabled = false
-
-    body.add_child(collision)
-
-    chunk_data["root"].add_child(body)
-    block_map[cell] = body
-
-
-func build_block_mesh(cell: Vector3i) -> ArrayMesh:
-    var vertices := PackedVector3Array()
-    var normals := PackedVector3Array()
-    var half: Vector3 = Vector3.ONE * 0.5
+    var block_origin := Vector3(cell) - chunk_origin
+    var face: Array
 
     for face_index in range(6):
         var direction: Vector3i = DIRECTIONS[face_index]
         var neighbor: Vector3i = cell + direction
 
-        # Грань создаётся только тогда, когда снаружи нет твёрдого блока.
         if is_solid(neighbor.x, neighbor.y, neighbor.z):
             continue
 
-        var face: Array = FACE_VERTICES[face_index]
-        var a: Vector3 = face[0] - half
-        var b: Vector3 = face[1] - half
-        var c: Vector3 = face[2] - half
-        var d: Vector3 = face[3] - half
+        face = FACE_VERTICES[face_index]
 
+        var a: Vector3 = block_origin + face[0]
+        var b: Vector3 = block_origin + face[1]
+        var c: Vector3 = block_origin + face[2]
+        var d: Vector3 = block_origin + face[3]
+
+        # Два треугольника одной грани.
         vertices.append_array([a, c, b, a, d, c])
-        for _i in range(6):
+
+        for i in range(6):
             normals.append(FACE_NORMALS[face_index])
 
-    var mesh := ArrayMesh.new()
-    if vertices.is_empty():
-        return mesh
 
-    var arrays: Array = []
-    arrays.resize(Mesh.ARRAY_MAX)
-    arrays[Mesh.ARRAY_VERTEX] = vertices
-    arrays[Mesh.ARRAY_NORMAL] = normals
-    mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-    mesh.surface_set_material(0, terrain_material)
-    return mesh
-
-
-func remove_block_visual(cell: Vector3i) -> void:
-    var chunk_key: Vector3i = index_to_chunk(cell)
-    if not chunks.has(chunk_key):
+func _finish_chunk_geometry(
+    key: Vector3i,
+    vertices: PackedVector3Array,
+    normals: PackedVector3Array
+) -> void:
+    if not chunks.has(key):
         return
 
-    var chunk_data: Dictionary = chunks[chunk_key]
-    var block_map: Dictionary = chunk_data["blocks"]
-    if not block_map.has(cell):
+    var chunk_data: Dictionary = chunks[key]
+    var root: Node3D = chunk_data["root"]
+
+    # Визуальная геометрия.
+    if not vertices.is_empty():
+        var mesh := ArrayMesh.new()
+
+        var arrays: Array = []
+        arrays.resize(Mesh.ARRAY_MAX)
+        arrays[Mesh.ARRAY_VERTEX] = vertices
+        arrays[Mesh.ARRAY_NORMAL] = normals
+
+        mesh.add_surface_from_arrays(
+            Mesh.PRIMITIVE_TRIANGLES,
+            arrays
+        )
+        mesh.surface_set_material(0, terrain_material)
+
+        var mesh_instance := MeshInstance3D.new()
+        mesh_instance.name = "ChunkMesh"
+        mesh_instance.mesh = mesh
+        root.add_child(mesh_instance)
+
+        chunk_data["mesh_instance"] = mesh_instance
+
+        # Единая физическая коллизия всего чанка.
+        var collision_shape := ConcavePolygonShape3D.new()
+        collision_shape.set_faces(vertices)
+
+        var body := StaticBody3D.new()
+        body.name = "ChunkCollision"
+        body.collision_layer = 1
+        body.collision_mask = 1
+
+        var shape_node := CollisionShape3D.new()
+        shape_node.name = "CollisionShape3D"
+        shape_node.shape = collision_shape
+
+        body.add_child(shape_node)
+        root.add_child(body)
+
+        chunk_data["physics_body"] = body
+
+
+func _clear_chunk_geometry(key: Vector3i) -> void:
+    if not chunks.has(key):
         return
 
-    var body: StaticBody3D = block_map[cell]
-    body.collision_layer = 0
-    body.collision_mask = 0
-    body.visible = false
-    body.queue_free()
-    block_map.erase(cell)
+    var chunk_data: Dictionary = chunks[key]
+
+    var mesh_instance: MeshInstance3D = chunk_data.get("mesh_instance")
+    if is_instance_valid(mesh_instance):
+        mesh_instance.queue_free()
+
+    var body: StaticBody3D = chunk_data.get("physics_body")
+    if is_instance_valid(body):
+        body.collision_layer = 0
+        body.collision_mask = 0
+        body.queue_free()
+
+    chunk_data.erase("mesh_instance")
+    chunk_data.erase("physics_body")
 
 
-func refresh_block_visual(cell: Vector3i) -> void:
-    var chunk_key: Vector3i = index_to_chunk(cell)
-    if not chunks.has(chunk_key):
+func rebuild_chunk_geometry(key: Vector3i) -> void:
+    if not chunks.has(key):
         return
 
-    if not is_block_visible(cell):
-        remove_block_visual(cell)
+    var chunk_data: Dictionary = chunks[key]
+
+    if not bool(chunk_data.get("generated", false)):
         return
 
-    var chunk_data: Dictionary = chunks[chunk_key]
-    var block_map: Dictionary = chunk_data["blocks"]
+    _clear_chunk_geometry(key)
 
-    if not block_map.has(cell):
-        create_block_visual(cell)
-        return
+    var vertices := PackedVector3Array()
+    var normals := PackedVector3Array()
 
-    var body: StaticBody3D = block_map[cell]
-    var mesh_instance: MeshInstance3D = body.get_node("MeshInstance3D")
-    mesh_instance.mesh = build_block_mesh(cell)
+    var origin := Vector3i(
+        key.x * CHUNK_SIZE,
+        key.y * CHUNK_SIZE,
+        key.z * CHUNK_SIZE
+    )
+
+    # Пересобираем только один чанк.
+    for z in range(CHUNK_SIZE):
+        for y in range(CHUNK_SIZE):
+            for x in range(CHUNK_SIZE):
+                var cell := origin + Vector3i(x, y, z)
+
+                if not is_solid(cell.x, cell.y, cell.z):
+                    continue
+
+                _append_cell_faces(cell, key, vertices, normals)
+
+    _finish_chunk_geometry(key, vertices, normals)
 
 
 # -----------------------------------------------------------------------------
@@ -432,17 +463,36 @@ func is_solid(x: int, y: int, z: int) -> bool:
     return block_center.distance_squared_to(get_planet_center()) <= RADIUS * RADIUS
 
 
+
 func destroy_block(cell: Vector3i) -> bool:
     if not is_solid(cell.x, cell.y, cell.z):
         return false
 
-    # Сначала мгновенно меняем логическое состояние блока.
     destroyed_blocks[cell] = true
-    remove_block_visual(cell)
 
-    # Только шесть соседей могут стать видимыми из-за этого разрушения.
-    for direction: Vector3i in DIRECTIONS:
-        refresh_block_visual(cell + direction)
+    var chunk_key := index_to_chunk(cell)
+    rebuild_chunk_geometry(chunk_key)
+
+    var local_cell := Vector3i(
+        posmod(cell.x, CHUNK_SIZE),
+        posmod(cell.y, CHUNK_SIZE),
+        posmod(cell.z, CHUNK_SIZE)
+    )
+
+    if local_cell.x == 0:
+        rebuild_chunk_geometry(chunk_key + Vector3i.LEFT)
+    elif local_cell.x == CHUNK_SIZE - 1:
+        rebuild_chunk_geometry(chunk_key + Vector3i.RIGHT)
+
+    if local_cell.y == 0:
+        rebuild_chunk_geometry(chunk_key + Vector3i.DOWN)
+    elif local_cell.y == CHUNK_SIZE - 1:
+        rebuild_chunk_geometry(chunk_key + Vector3i.UP)
+
+    if local_cell.z == 0:
+        rebuild_chunk_geometry(chunk_key + Vector3i(0, 0, -1))
+    elif local_cell.z == CHUNK_SIZE - 1:
+        rebuild_chunk_geometry(chunk_key + Vector3i(0, 0, 1))
 
     return true
 
@@ -519,15 +569,20 @@ func mine(
     return false
 
 
+
 func has_collision_at(world_position: Vector3) -> bool:
     var cell: Vector3i = get_cell(world_position)
     var chunk_key: Vector3i = index_to_chunk(cell)
+
     if not chunks.has(chunk_key):
         return false
 
     var chunk_data: Dictionary = chunks[chunk_key]
-    var block_map: Dictionary = chunk_data["blocks"]
-    return block_map.has(cell)
+
+    if not bool(chunk_data.get("generated", false)):
+        return false
+
+    return is_block_visible(cell)
 
 
 # -----------------------------------------------------------------------------
@@ -691,54 +746,3 @@ func is_chunk_ready_at(world_position: Vector3) -> bool:
     var chunk_data: Dictionary = chunks[key]
 
     return bool(chunk_data.get("generated", false))
-
-func debug_chunk_at(world_position: Vector3) -> void:
-    var cell := get_cell(world_position)
-    var key := index_to_chunk(cell)
-
-    print("\n--- PHYSICS DEBUG ---")
-    print("Cell: ", cell)
-
-    if not chunks.has(key):
-        print("CHUNK DOES NOT EXIST")
-        return
-
-    var data: Dictionary = chunks[key]
-    var blocks: Dictionary = data["blocks"]
-
-    print("Generated: ", data.get("generated", false))
-    print("Block exists: ", blocks.has(cell))
-
-    if not blocks.has(cell):
-        print("NO BLOCK NODE")
-        return
-
-    var body: StaticBody3D = blocks[cell]
-    var shape := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
-
-    print("Body RID: ", body.get_rid())
-    print("Body space: ", PhysicsServer3D.body_get_space(body.get_rid()))
-    print("World space: ", get_world_3d().space)
-    print("Shape size: ", (shape.shape as BoxShape3D).size)
-    print("Shape owner: ", shape.get_parent())
-    print("Body transform: ", body.global_transform)
-
-    # Обновляем трансформ и ждём физический кадр.
-    body.force_update_transform()
-    await get_tree().physics_frame
-
-    var start := body.global_position + Vector3.UP * 2.0
-    var finish := body.global_position - Vector3.UP * 2.0
-
-    var query := PhysicsRayQueryParameters3D.create(start, finish)
-    query.collision_mask = 1
-
-    var hit := get_world_3d().direct_space_state.intersect_ray(query)
-
-    if hit.is_empty():
-        print("DIRECT RAY AFTER PHYSICS FRAME: NOTHING")
-    else:
-        print("DIRECT RAY AFTER PHYSICS FRAME: ", hit["collider"].name)
-
-
-

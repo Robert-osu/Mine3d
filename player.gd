@@ -191,18 +191,8 @@ func _physics_process(delta: float) -> void:
         vertical_speed = 0.0
         velocity = Vector3.ZERO
 
-    var old_position := global_position
 
     move_and_slide()
-
-    var actual_delta := global_position - old_position
-
-    if actual_delta.length() > 1.0:
-        print("LARGE MOVEMENT: ", actual_delta)
-        print("VELOCITY: ", velocity)
-
-    if not is_on_floor() and vertical_speed < -1.0:
-        debug_ground_collision(up)
 
     planet.update_streaming(global_position)
 
@@ -261,52 +251,3 @@ func is_ground_area_ready(position: Vector3, up: Vector3) -> bool:
             return false
 
     return true
-
-func debug_ground_collision(up: Vector3) -> void:
-    var space := get_world_3d().direct_space_state
-
-    var query := PhysicsRayQueryParameters3D.create(
-        global_position - up * 0.3,
-        global_position - up * 3.0
-    )
-
-    query.collision_mask = collision_mask
-    query.exclude = [get_rid()]
-
-    var result := space.intersect_ray(query)
-
-    var hit := get_world_3d().direct_space_state.intersect_ray(query)
-
-    print(
-        "POS: ", global_position,
-        " | MASK: ", collision_mask,
-        " | LAYER: ", collision_layer,
-        " | FLOOR: ", is_on_floor(),
-        " | SLIDES: ", get_slide_collision_count()
-    )
-
-    if hit.is_empty():
-        print("GROUND RAY: NOTHING FOUND")
-    else:
-        var collider = hit["collider"]
-        print(
-            "GROUND RAY: HIT ",
-            collider.name,
-            " | COLLIDER LAYER: ", collider.collision_layer,
-            " | POINT: ", hit["position"]
-        )
-
-    if result.is_empty():
-        print("GROUND RAY: NOTHING FOUND")
-        var up_ := (global_position - planet.to_global(
-            planet.get_planet_center()
-        )).normalized()
-
-        planet.debug_chunk_at(global_position - up_ * 1.0)
-    else:
-        print(
-            "GROUND RAY: HIT ",
-            result.collider.name,
-            " at ",
-            result.position
-        )
