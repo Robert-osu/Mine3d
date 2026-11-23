@@ -5,7 +5,7 @@ class_name Planet
 @export_range(1, 1000) var planet_scale: int = 5
 
 @export_group("Chunks")
-@export_range(1, 4) var load_radius: int = 1
+@export_range(1, 8) var load_radius: int = 1
 @export_range(1, 6) var unload_radius: int = 3
 @export_range(96, 2048) var blocks_per_frame: int = 512
 
@@ -160,7 +160,19 @@ func _build_visible_cells(
                     key.z * CHUNK_SIZE + z
                 )
 
-                if not _is_solid_snapshot(cell, center, destroyed_snapshot):
+                var block_center := Vector3(cell) + Vector3.ONE * 0.5
+                var distance_squared := block_center.distance_squared_to(center)
+
+                # Пропускаем блоки глубоко под поверхностью.
+                var inner_radius := maxf(0.0, RADIUS - BLOCK_SIZE)
+
+                if distance_squared < inner_radius * inner_radius:
+                    continue
+
+                if distance_squared > RADIUS * RADIUS:
+                    continue
+
+                if destroyed_snapshot.has(cell):
                     continue
 
                 var exposed: bool = false
@@ -655,10 +667,44 @@ func chunk_intersects_planet(key: Vector3i) -> bool:
         key.y * CHUNK_SIZE,
         key.z * CHUNK_SIZE
     )
-    var chunk_max: Vector3 = chunk_min + Vector3.ONE * CHUNK_SIZE
-    var center: Vector3 = get_planet_center()
-    var closest: Vector3 = center.clamp(chunk_min, chunk_max)
-    return closest.distance_to(center) <= RADIUS + 1.0
+
+    var chunk_max := chunk_min + Vector3.ONE * CHUNK_SIZE
+    var center := get_planet_center()
+
+    # Ближайшая к центру точка чанка.
+    var closest := center.clamp(chunk_min, chunk_max)
+
+    # Самая удалённая от центра точка чанка.
+    var farthest := Vector3(
+        maxf(
+            absf(center.x - chunk_min.x),
+            absf(center.x - chunk_max.x)
+        ),
+        maxf(
+            absf(center.y - chunk_min.y),
+            absf(center.y - chunk_max.y)
+        ),
+        maxf(
+            absf(center.z - chunk_min.z),
+            absf(center.z - chunk_max.z)
+        )
+    )
+
+    var min_distance_squared := closest.distance_squared_to(center)
+    var max_distance_squared := farthest.length_squared()
+
+    # Чанк должен пересекать объём планеты.
+    if min_distance_squared > RADIUS * RADIUS:
+        return false
+
+    # Чанк должен доходить до поверхности.
+    # Всё, что глубже одного блока под поверхностью, не загружаем.
+    var inner_radius := maxf(0.0, RADIUS - BLOCK_SIZE)
+
+    if max_distance_squared < inner_radius * inner_radius:
+        return false
+
+    return true
 
 
 func create_chunk(key: Vector3i) -> void:
