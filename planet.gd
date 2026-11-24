@@ -52,7 +52,11 @@ var RADIUS: float = 0.0
 # chunks[key] = { root, blocks, request_id, pending_cells, build_cursor }
 # blocks[cell] = StaticBody3D for a currently visible block.
 var chunks: Dictionary = {}
-var destroyed_blocks: Dictionary = {}
+
+# Глобальное хранилище изменений.
+# Ключ — глобальная координата секции.
+# Значение — PackedByteArray из 512 элементов.
+var section_deltas: Dictionary = {}
 
 var terrain_material: StandardMaterial3D
 var last_center_chunk := Vector3i(-999999, -999999, -999999)
@@ -601,11 +605,12 @@ func start_chunk_jobs() -> void:
         chunk_data["request_id"] = request_id
 
         # Снимок нужен только для первоначального сканирования загружаемого чанка.
-        var destroyed_snapshot: Dictionary = destroyed_blocks.duplicate()
+        var delta_snapshot := create_chunk_delta_snapshot(key)
+
         active_chunk_requests[key] = request_id
 
         var task_id: int = WorkerThreadPool.add_task(
-            _build_visible_cells.bind(key, destroyed_snapshot, request_id),
+            _build_visible_cells.bind(key, delta_snapshot, request_id),
             false,
             "Scan visible voxel blocks"
         )
@@ -615,34 +620,66 @@ func start_chunk_jobs() -> void:
 
 func _build_visible_cells(
     key: Vector3i,
-    destroyed_snapshot: Dictionary,
+    delta_snapshot: Dictionary,
     request_id: int
 ) -> void:
     var visible_cells: Array[Vector3i] = []
-    var center: Vector3 = Vector3(SIZE, SIZE, SIZE) * 0.5
+
+    var half_size := float(SIZE) * 0.5
+    var radius_squared := RADIUS * RADIUS
+    var has_deltas := not delta_snapshot.is_empty()
+
+    var chunk_origin := key * CHUNK_SIZE
 
     for z in range(CHUNK_SIZE):
+        var gz := chunk_origin.z + z
+        var dz := float(gz) + 0.5 - half_size
+        var dz_squared := dz * dz
+
         for y in range(CHUNK_SIZE):
+            var gy := chunk_origin.y + y
+            var dy := float(gy) + 0.5 - half_size
+            var dyz_squared := dy * dy + dz_squared
+
             for x in range(CHUNK_SIZE):
-                var cell := Vector3i(
-                    key.x * CHUNK_SIZE + x,
-                    key.y * CHUNK_SIZE + y,
-                    key.z * CHUNK_SIZE + z
-                )
+                var gx := chunk_origin.x + x
+                var dx := float(gx) + 0.5 - half_size
 
-                var block_center := Vector3(cell) + Vector3.ONE * 0.5
-                var distance_squared := block_center.distance_squared_to(center)
-
-                # Пропускаем только блоки за пределами планеты.
-                if distance_squared > RADIUS * RADIUS:
+                # Проверяем принадлежность сфере без Vector3.
+                if dx * dx + dyz_squared > radius_squared:
                     continue
 
-                if destroyed_snapshot.has(cell):
-                    continue
+                # Проверяем разрушение блока.
+                if has_deltas:
+                    var section_id := Vector3i(
+                        key.x * SECTIONS_PER_CHUNK + x / SECTION_SIZE,
+                        key.y * SECTIONS_PER_CHUNK + y / SECTION_SIZE,
+                        key.z * SECTIONS_PER_CHUNK + z / SECTION_SIZE
+                    )
 
-                var exposed: bool = false
+                    if delta_snapshot.has(section_id):
+                        var local_index := (
+                            (z % SECTION_SIZE) * SECTION_SIZE * SECTION_SIZE
+                            + (y % SECTION_SIZE) * SECTION_SIZE
+                            + (x % SECTION_SIZE)
+                        )
+
+                        var delta: PackedByteArray = delta_snapshot[section_id]
+
+                        if delta[local_index] != 0:
+                            continue
+
+                var cell := Vector3i(gx, gy, gz)
+                var exposed := false
+
                 for direction: Vector3i in DIRECTIONS:
-                    if not _is_solid_snapshot(cell + direction, center, destroyed_snapshot):
+                    if not _is_solid_snapshot(
+                        cell + direction,
+                        half_size,
+                        radius_squared,
+                        delta_snapshot,
+                        has_deltas
+                    ):
                         exposed = true
                         break
 
@@ -650,31 +687,54 @@ func _build_visible_cells(
                     visible_cells.append(cell)
 
     completed_mutex.lock()
+
     completed_chunk_data[request_id] = {
         "key": key,
         "request_id": request_id,
         "visible_cells": visible_cells
     }
-    completed_mutex.unlock()
 
+    completed_mutex.unlock()
 
 func _is_solid_snapshot(
     cell: Vector3i,
-    center: Vector3,
-    destroyed_snapshot: Dictionary
+    half_size: float,
+    radius_squared: float,
+    delta_snapshot: Dictionary,
+    has_deltas: bool
 ) -> bool:
+
     if cell.x < 0 or cell.x >= SIZE:
         return false
     if cell.y < 0 or cell.y >= SIZE:
         return false
     if cell.z < 0 or cell.z >= SIZE:
         return false
-    if destroyed_snapshot.has(cell):
+
+    if has_deltas:
+        if _is_destroyed_snapshot(cell, delta_snapshot):
+            return false
+
+    var dx := float(cell.x) + 0.5 - half_size
+    var dy := float(cell.y) + 0.5 - half_size
+    var dz := float(cell.z) + 0.5 - half_size
+
+    return dx * dx + dy * dy + dz * dz <= radius_squared
+
+func _is_destroyed_snapshot(
+    cell: Vector3i,
+    delta_snapshot: Dictionary
+) -> bool:
+
+    var section_id := get_global_section_key(cell)
+
+    if not delta_snapshot.has(section_id):
         return false
 
-    var block_center: Vector3 = Vector3(cell) + Vector3.ONE * 0.5
-    return block_center.distance_squared_to(center) <= RADIUS * RADIUS
+    var delta: PackedByteArray = delta_snapshot[section_id]
+    var index := get_local_section_index(cell)
 
+    return delta[index] != 0
 
 
 func apply_completed_chunk_data() -> void:
@@ -979,13 +1039,17 @@ func is_solid(x: int, y: int, z: int) -> bool:
     if z < 0 or z >= SIZE:
         return false
 
-    var cell := Vector3i(x, y, z)
-    if destroyed_blocks.has(cell):
-        return false
+    if not section_deltas.is_empty():
+        if is_block_destroyed(Vector3i(x, y, z)):
+            return false
 
-    var block_center: Vector3 = Vector3(x, y, z) + Vector3.ONE * 0.5
-    return block_center.distance_squared_to(get_planet_center()) <= RADIUS * RADIUS
+    var half_size := float(SIZE) * 0.5
 
+    var dx := float(x) + 0.5 - half_size
+    var dy := float(y) + 0.5 - half_size
+    var dz := float(z) + 0.5 - half_size
+
+    return dx * dx + dy * dy + dz * dz <= RADIUS * RADIUS
 
 
 
@@ -993,7 +1057,7 @@ func destroy_block(cell: Vector3i) -> bool:
     if not is_solid(cell.x, cell.y, cell.z):
         return false
 
-    destroyed_blocks[cell] = true
+    set_block_destroyed(cell)
 
     var chunk_key := index_to_chunk(cell)
     var section_key := get_section_key(cell)
@@ -1400,3 +1464,79 @@ func rebuild_section_geometry(
 
 
     
+
+
+func get_global_section_key(cell: Vector3i) -> Vector3i:
+    return Vector3i(
+        floori(float(cell.x) / SECTION_SIZE),
+        floori(float(cell.y) / SECTION_SIZE),
+        floori(float(cell.z) / SECTION_SIZE)
+    )
+
+
+func get_local_section_index(cell: Vector3i) -> int:
+    var local := Vector3i(
+        posmod(cell.x, SECTION_SIZE),
+        posmod(cell.y, SECTION_SIZE),
+        posmod(cell.z, SECTION_SIZE)
+    )
+
+    return (
+        local.z * SECTION_SIZE * SECTION_SIZE
+        + local.y * SECTION_SIZE
+        + local.x
+    )
+
+
+func is_block_destroyed(cell: Vector3i) -> bool:
+    # На нетронутой планете сразу выходим.
+    if section_deltas.is_empty():
+        return false
+
+    var section_id := get_global_section_key(cell)
+
+    if not section_deltas.has(section_id):
+        return false
+
+    var delta: PackedByteArray = section_deltas[section_id]
+    var index := get_local_section_index(cell)
+
+    return delta[index] != 0
+
+func set_block_destroyed(cell: Vector3i) -> void:
+    var section_id := get_global_section_key(cell)
+
+    var delta: PackedByteArray = section_deltas.get(
+        section_id,
+        PackedByteArray()
+    )
+
+    if delta.is_empty():
+        delta.resize(SECTION_SIZE * SECTION_SIZE * SECTION_SIZE)
+
+    var index := get_local_section_index(cell)
+    delta[index] = 1
+
+    section_deltas[section_id] = delta
+
+func create_chunk_delta_snapshot(
+    chunk_key: Vector3i
+) -> Dictionary:
+
+    var result: Dictionary = {}
+
+    var base := chunk_key * SECTIONS_PER_CHUNK
+
+    # Четыре секции чанка плюс соседние секции
+    # для проверки граничных блоков.
+    for z in range(base.z - 1, base.z + SECTIONS_PER_CHUNK + 1):
+        for y in range(base.y - 1, base.y + SECTIONS_PER_CHUNK + 1):
+            for x in range(base.x - 1, base.x + SECTIONS_PER_CHUNK + 1):
+
+                var section_id := Vector3i(x, y, z)
+
+                if section_deltas.has(section_id):
+                    result[section_id] = section_deltas[section_id]
+
+    return result
+
