@@ -67,6 +67,33 @@ var next_request_id: int = 0
 const MAX_PARALLEL_CHUNKS: int = 2
 const MAX_CHUNKS_PER_FRAME: int = 1
 
+# -----------------------------------------------------------------------------
+# ASYNC SECTION BUILDER
+# -----------------------------------------------------------------------------
+
+const MAX_PARALLEL_SECTION_JOBS: int = 2
+const MAX_SECTION_JOBS_PER_FRAME: int = 2
+
+const SECTION_SNAPSHOT_SIZE: int = SECTION_SIZE + 2
+
+var section_queue: Array[Vector3i] = []
+var queued_sections: Dictionary = {}
+
+# section_id -> request_id
+var active_section_requests: Dictionary = {}
+
+# section_id -> version
+var section_versions: Dictionary = {}
+
+# task_id -> request_id
+var section_worker_task_ids: Dictionary = {}
+
+# request_id -> result
+var completed_section_data: Dictionary = {}
+
+var section_mutex := Mutex.new()
+var next_section_request_id: int = 0
+
 
 func _ready() -> void:
     SIZE = 32 * planet_scale
@@ -82,10 +109,313 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
     collect_finished_worker_tasks()
+    collect_finished_section_tasks()
+
     start_chunk_jobs()
+    start_section_jobs()
+
     apply_completed_chunk_data()
+    apply_completed_section_data()
+
     process_pending_block_creation()
 
+
+func _build_section_mesh_job(
+    section_id: Vector3i,
+    chunk_key: Vector3i,
+    section_key: Vector3i,
+    request_id: int,
+    version: int,
+    snapshot: PackedByteArray
+) -> void:
+
+    var vertices := PackedVector3Array()
+    var normals := PackedVector3Array()
+
+    var size: int = SECTION_SNAPSHOT_SIZE
+
+    # Индекс блока внутри снимка.
+    # Координаты секции начинаются с 1,
+    # поскольку нулевой слой — внешняя граница.
+    for z in range(SECTION_SIZE):
+        for y in range(SECTION_SIZE):
+            for x in range(SECTION_SIZE):
+
+                var sx: int = x + 1
+                var sy: int = y + 1
+                var sz: int = z + 1
+
+                var index: int = (
+                    sz * size * size
+                    + sy * size
+                    + sx
+                )
+
+                if snapshot[index] == 0:
+                    continue
+
+                var block_origin := Vector3(x, y, z)
+
+                for face_index in range(6):
+                    var direction: Vector3i = DIRECTIONS[face_index]
+
+                    var nx: int = sx + direction.x
+                    var ny: int = sy + direction.y
+                    var nz: int = sz + direction.z
+
+                    var neighbor_index: int = (
+                        nz * size * size
+                        + ny * size
+                        + nx
+                    )
+
+                    # Сосед существует — грань не нужна.
+                    if snapshot[neighbor_index] == 1:
+                        continue
+
+                    var face: Array = FACE_VERTICES[face_index]
+
+                    var a: Vector3 = block_origin + face[0]
+                    var b: Vector3 = block_origin + face[1]
+                    var c: Vector3 = block_origin + face[2]
+                    var d: Vector3 = block_origin + face[3]
+
+                    vertices.append_array([
+                        a, c, b,
+                        a, d, c
+                    ])
+
+                    for i in range(6):
+                        normals.append(FACE_NORMALS[face_index])
+
+    # Передаём результат главному потоку.
+    section_mutex.lock()
+
+    completed_section_data[request_id] = {
+        "section_id": section_id,
+        "chunk_key": chunk_key,
+        "section_key": section_key,
+        "request_id": request_id,
+        "version": version,
+        "vertices": vertices,
+        "normals": normals
+    }
+
+    section_mutex.unlock()
+
+func make_section_id(
+    chunk_key: Vector3i,
+    section_key: Vector3i
+) -> Vector3i:
+    return chunk_key * SECTIONS_PER_CHUNK + section_key
+
+func queue_section_rebuild(
+    chunk_key: Vector3i,
+    section_key: Vector3i
+) -> void:
+
+    if not chunks.has(chunk_key):
+        return
+
+    var chunk_data: Dictionary = chunks[chunk_key]
+
+    if not bool(chunk_data.get("generated", false)):
+        return
+
+    var section_id := make_section_id(
+        chunk_key,
+        section_key
+    )
+
+    # Каждое изменение увеличивает версию.
+    var version: int = int(
+        section_versions.get(section_id, 0)
+    ) + 1
+
+    section_versions[section_id] = version
+
+    # Если секция уже стоит в очереди, не добавляем повторно.
+    if queued_sections.has(section_id):
+        return
+
+    queued_sections[section_id] = true
+    section_queue.append(section_id)
+
+func start_section_jobs() -> void:
+    var started: int = 0
+
+    while (
+        started < MAX_SECTION_JOBS_PER_FRAME
+        and active_section_requests.size() < MAX_PARALLEL_SECTION_JOBS
+        and not section_queue.is_empty()
+    ):
+
+        var section_id: Vector3i = section_queue.pop_front()
+        queued_sections.erase(section_id)
+
+        # Разбираем глобальные координаты секции.
+        var chunk_key := Vector3i(
+            floori(float(section_id.x) / SECTIONS_PER_CHUNK),
+            floori(float(section_id.y) / SECTIONS_PER_CHUNK),
+            floori(float(section_id.z) / SECTIONS_PER_CHUNK)
+        )
+
+        var section_key := Vector3i(
+            posmod(section_id.x, SECTIONS_PER_CHUNK),
+            posmod(section_id.y, SECTIONS_PER_CHUNK),
+            posmod(section_id.z, SECTIONS_PER_CHUNK)
+        )
+
+        if not chunks.has(chunk_key):
+            continue
+
+        # Не запускаем вторую задачу для той же секции.
+        if active_section_requests.has(section_id):
+            if not queued_sections.has(section_id):
+                queued_sections[section_id] = true
+                section_queue.append(section_id)
+
+            break
+
+        var chunk_data: Dictionary = chunks[chunk_key]
+
+        if not bool(chunk_data.get("generated", false)):
+            continue
+
+        var version: int = int(
+            section_versions.get(section_id, 0)
+        )
+
+        # Снимаем состояние блоков в главном потоке.
+        var snapshot := create_section_snapshot(
+            chunk_key,
+            section_key
+        )
+
+        next_section_request_id += 1
+        var request_id: int = next_section_request_id
+
+        active_section_requests[section_id] = request_id
+
+        var task_id: int = WorkerThreadPool.add_task(
+            _build_section_mesh_job.bind(
+                section_id,
+                chunk_key,
+                section_key,
+                request_id,
+                version,
+                snapshot
+            ),
+            false,
+            "Build voxel section"
+        )
+
+        section_worker_task_ids[task_id] = request_id
+
+        started += 1
+
+func collect_finished_section_tasks() -> void:
+    var finished_ids: Array[int] = []
+
+    for task_id_variant in section_worker_task_ids.keys():
+        var task_id: int = int(task_id_variant)
+
+        if WorkerThreadPool.is_task_completed(task_id):
+            WorkerThreadPool.wait_for_task_completion(task_id)
+            finished_ids.append(task_id)
+
+    for task_id in finished_ids:
+        section_worker_task_ids.erase(task_id)
+
+func apply_completed_section_data() -> void:
+    section_mutex.lock()
+
+    if completed_section_data.is_empty():
+        section_mutex.unlock()
+        return
+
+    var results: Array = completed_section_data.values()
+    completed_section_data.clear()
+
+    section_mutex.unlock()
+
+    for result: Dictionary in results:
+
+        var section_id: Vector3i = result["section_id"]
+        var request_id: int = int(result["request_id"])
+
+        # Проверяем, что это всё ещё актуальный запрос.
+        if active_section_requests.get(section_id, -1) != request_id:
+            continue
+
+        active_section_requests.erase(section_id)
+
+        var current_version: int = int(
+            section_versions.get(section_id, -1)
+        )
+
+        # Пока поток работал, блоки могли измениться.
+        if int(result["version"]) != current_version:
+            continue
+
+        var chunk_key: Vector3i = result["chunk_key"]
+        var section_key: Vector3i = result["section_key"]
+
+        if not chunks.has(chunk_key):
+            continue
+
+        var chunk_data: Dictionary = chunks[chunk_key]
+
+        if not bool(chunk_data.get("generated", false)):
+            continue
+
+        # Удаляем старую геометрию.
+        _clear_section_geometry(
+            chunk_key,
+            section_key
+        )
+
+        # Устанавливаем новую.
+        _finish_section_geometry(
+            chunk_key,
+            section_key,
+            result["vertices"],
+            result["normals"]
+        )
+
+func create_section_snapshot(
+    chunk_key: Vector3i,
+    section_key: Vector3i
+) -> PackedByteArray:
+
+    var snapshot := PackedByteArray()
+    snapshot.resize(
+        SECTION_SNAPSHOT_SIZE
+        * SECTION_SNAPSHOT_SIZE
+        * SECTION_SNAPSHOT_SIZE
+    )
+
+    var origin := get_section_origin(chunk_key, section_key)
+
+    for z in range(-1, SECTION_SIZE + 1):
+        for y in range(-1, SECTION_SIZE + 1):
+            for x in range(-1, SECTION_SIZE + 1):
+
+                var cell := origin + Vector3i(x, y, z)
+
+                var index := (
+                    (z + 1) * SECTION_SNAPSHOT_SIZE * SECTION_SNAPSHOT_SIZE
+                    + (y + 1) * SECTION_SNAPSHOT_SIZE
+                    + (x + 1)
+                )
+
+                snapshot[index] = 1 if is_solid(
+                    cell.x,
+                    cell.y,
+                    cell.z
+                ) else 0
+
+    return snapshot
 
 func _exit_tree() -> void:
     # Не позволяем фоновым задачам обращаться к объекту после его удаления.
@@ -93,6 +423,12 @@ func _exit_tree() -> void:
         var task_id: int = int(task_id_variant)
         WorkerThreadPool.wait_for_task_completion(task_id)
     worker_task_ids.clear()
+
+    for task_id_variant in section_worker_task_ids.keys():
+        var task_id: int = int(task_id_variant)
+        WorkerThreadPool.wait_for_task_completion(task_id)
+
+    section_worker_task_ids.clear()
 
 
 func collect_finished_worker_tasks() -> void:
@@ -790,6 +1126,27 @@ func unload_chunk(key: Vector3i) -> void:
     var chunk_data: Dictionary = chunks[key]
     var root: Node3D = chunk_data["root"]
     root.queue_free()
+
+    # Удаляем ожидающие секции этого чанка.
+    for z in range(SECTIONS_PER_CHUNK):
+        for y in range(SECTIONS_PER_CHUNK):
+            for x in range(SECTIONS_PER_CHUNK):
+
+                var section_key := Vector3i(x, y, z)
+
+                var section_id := make_section_id(
+                    key,
+                    section_key
+                )
+
+                section_queue.erase(section_id)
+                queued_sections.erase(section_id)
+
+                # Инвалидируем старую версию.
+                section_versions[section_id] = (
+                    int(section_versions.get(section_id, 0)) + 1
+                )
+
     chunks.erase(key)
     chunk_queue.erase(key)
     active_chunk_requests.erase(key)
@@ -883,43 +1240,7 @@ func rebuild_section_geometry(
     chunk_key: Vector3i,
     section_key: Vector3i
 ) -> void:
-    if not chunks.has(chunk_key):
-        return
+    queue_section_rebuild(chunk_key, section_key)
 
-    var chunk_data: Dictionary = chunks[chunk_key]
 
-    if not bool(chunk_data.get("generated", false)):
-        return
-
-    # Удаляем старую геометрию.
-    _clear_section_geometry(chunk_key, section_key)
-
-    var vertices := PackedVector3Array()
-    var normals := PackedVector3Array()
-
-    var origin := get_section_origin(chunk_key, section_key)
-
-    # Проверяем только 8×8×8 блоков.
-    for z in range(SECTION_SIZE):
-        for y in range(SECTION_SIZE):
-            for x in range(SECTION_SIZE):
-
-                var cell := origin + Vector3i(x, y, z)
-
-                if not is_solid(cell.x, cell.y, cell.z):
-                    continue
-
-                _append_cell_faces(
-                    cell,
-                    origin,
-                    vertices,
-                    normals
-                )
-
-    # Создаём новую геометрию.
-    _finish_section_geometry(
-        chunk_key,
-        section_key,
-        vertices,
-        normals
-    )
+    
