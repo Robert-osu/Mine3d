@@ -16,6 +16,9 @@ class_name Planet
 const CHUNK_SIZE: int = 32
 const BLOCK_SIZE: float = 1.0
 
+const SECTION_SIZE: int = 8
+const SECTIONS_PER_CHUNK: int = CHUNK_SIZE / SECTION_SIZE
+
 const DIRECTIONS: Array[Vector3i] = [
     Vector3i(1, 0, 0),
     Vector3i(-1, 0, 0),
@@ -240,8 +243,7 @@ func apply_completed_chunk_data() -> void:
 
     chunk_data["pending_cells"] = result["visible_cells"]
     chunk_data["build_cursor"] = 0
-    chunk_data["mesh_vertices"] = PackedVector3Array()
-    chunk_data["mesh_normals"] = PackedVector3Array()
+    chunk_data["section_build_data"] = {}
 
 func process_pending_block_creation() -> void:
     var budget: int = blocks_per_frame
@@ -253,39 +255,104 @@ func process_pending_block_creation() -> void:
             break
 
         var key: Vector3i = key_variant
+
         if not chunks.has(key):
             continue
 
         var chunk_data: Dictionary = chunks[key]
+
         if not chunk_data.has("pending_cells"):
             continue
 
         var pending_cells: Array = chunk_data["pending_cells"]
         var cursor: int = int(chunk_data["build_cursor"])
 
-        var vertices: PackedVector3Array = chunk_data["mesh_vertices"]
-        var normals: PackedVector3Array = chunk_data["mesh_normals"]
+        var section_build_data: Dictionary = chunk_data.get(
+            "section_build_data",
+            {}
+        )
 
         while cursor < pending_cells.size() and budget > 0:
             var cell: Vector3i = pending_cells[cursor]
             cursor += 1
             budget -= 1
 
-            if is_solid(cell.x, cell.y, cell.z):
-                _append_cell_faces(cell, key, vertices, normals)
+            if not is_solid(cell.x, cell.y, cell.z):
+                continue
+
+            var section_key := get_section_key(cell)
+
+            var section_data: Dictionary = section_build_data.get(
+                section_key,
+                {
+                    "vertices": PackedVector3Array(),
+                    "normals": PackedVector3Array()
+                }
+            )
+
+            var vertices: PackedVector3Array = section_data["vertices"]
+            var normals: PackedVector3Array = section_data["normals"]
+
+            _append_cell_faces(
+                cell,
+                get_section_origin(key, section_key),
+                vertices,
+                normals
+            )
+
+            section_data["vertices"] = vertices
+            section_data["normals"] = normals
+
+            section_build_data[section_key] = section_data
 
         chunk_data["build_cursor"] = cursor
-        chunk_data["mesh_vertices"] = vertices
-        chunk_data["mesh_normals"] = normals
+        chunk_data["section_build_data"] = section_build_data
 
         if cursor >= pending_cells.size():
             chunk_data.erase("pending_cells")
             chunk_data.erase("build_cursor")
 
-            _finish_chunk_geometry(key, vertices, normals)
+            # Создаём геометрию каждой готовой секции.
+            for section_key_variant in section_build_data.keys():
+                var section_key: Vector3i = section_key_variant
+                var section_data: Dictionary = section_build_data[section_key]
+
+                _finish_section_geometry(
+                    key,
+                    section_key,
+                    section_data["vertices"],
+                    section_data["normals"]
+                )
+
+            chunk_data.erase("section_build_data")
             chunk_data["generated"] = true
 
+func get_section_key(cell: Vector3i) -> Vector3i:
+    var local_cell := Vector3i(
+        posmod(cell.x, CHUNK_SIZE),
+        posmod(cell.y, CHUNK_SIZE),
+        posmod(cell.z, CHUNK_SIZE)
+    )
 
+    return Vector3i(
+        floori(float(local_cell.x) / SECTION_SIZE),
+        floori(float(local_cell.y) / SECTION_SIZE),
+        floori(float(local_cell.z) / SECTION_SIZE)
+    )
+
+
+func get_section_origin(
+    chunk_key: Vector3i,
+    section_key: Vector3i
+) -> Vector3i:
+    return (
+        chunk_key * CHUNK_SIZE
+        + section_key * SECTION_SIZE
+    )
+
+
+func get_section_owner(cell: Vector3i) -> Vector3i:
+    return index_to_chunk(cell)
 
 # -----------------------------------------------------------------------------
 # BLOCK VISUALS AND COLLISION
@@ -312,18 +379,11 @@ func is_block_visible(cell: Vector3i) -> bool:
 
 func _append_cell_faces(
     cell: Vector3i,
-    chunk_key: Vector3i,
+    section_origin: Vector3i,
     vertices: PackedVector3Array,
     normals: PackedVector3Array
 ) -> void:
-    var chunk_origin := Vector3(
-        chunk_key.x * CHUNK_SIZE,
-        chunk_key.y * CHUNK_SIZE,
-        chunk_key.z * CHUNK_SIZE
-    )
-
-    var block_origin := Vector3(cell) - chunk_origin
-    var face: Array
+    var block_origin := Vector3(cell - section_origin)
 
     for face_index in range(6):
         var direction: Vector3i = DIRECTIONS[face_index]
@@ -332,124 +392,102 @@ func _append_cell_faces(
         if is_solid(neighbor.x, neighbor.y, neighbor.z):
             continue
 
-        face = FACE_VERTICES[face_index]
+        var face: Array = FACE_VERTICES[face_index]
 
         var a: Vector3 = block_origin + face[0]
         var b: Vector3 = block_origin + face[1]
         var c: Vector3 = block_origin + face[2]
         var d: Vector3 = block_origin + face[3]
 
-        # Два треугольника одной грани.
         vertices.append_array([a, c, b, a, d, c])
 
         for i in range(6):
             normals.append(FACE_NORMALS[face_index])
 
-
-func _finish_chunk_geometry(
-    key: Vector3i,
+func _finish_section_geometry(
+    chunk_key: Vector3i,
+    section_key: Vector3i,
     vertices: PackedVector3Array,
     normals: PackedVector3Array
 ) -> void:
-    if not chunks.has(key):
+    if not chunks.has(chunk_key):
         return
 
-    var chunk_data: Dictionary = chunks[key]
+    var chunk_data: Dictionary = chunks[chunk_key]
     var root: Node3D = chunk_data["root"]
 
-    # Визуальная геометрия.
-    if not vertices.is_empty():
-        var mesh := ArrayMesh.new()
-
-        var arrays: Array = []
-        arrays.resize(Mesh.ARRAY_MAX)
-        arrays[Mesh.ARRAY_VERTEX] = vertices
-        arrays[Mesh.ARRAY_NORMAL] = normals
-
-        mesh.add_surface_from_arrays(
-            Mesh.PRIMITIVE_TRIANGLES,
-            arrays
-        )
-        mesh.surface_set_material(0, terrain_material)
-
-        var mesh_instance := MeshInstance3D.new()
-        mesh_instance.name = "ChunkMesh"
-        mesh_instance.mesh = mesh
-        root.add_child(mesh_instance)
-
-        chunk_data["mesh_instance"] = mesh_instance
-
-        # Единая физическая коллизия всего чанка.
-        var collision_shape := ConcavePolygonShape3D.new()
-        collision_shape.set_faces(vertices)
-
-        var body := StaticBody3D.new()
-        body.name = "ChunkCollision"
-        body.collision_layer = 1
-        body.collision_mask = 1
-
-        var shape_node := CollisionShape3D.new()
-        shape_node.name = "CollisionShape3D"
-        shape_node.shape = collision_shape
-
-        body.add_child(shape_node)
-        root.add_child(body)
-
-        chunk_data["physics_body"] = body
-
-
-func _clear_chunk_geometry(key: Vector3i) -> void:
-    if not chunks.has(key):
+    # Пустая секция не нуждается в меше.
+    if vertices.is_empty():
         return
 
-    var chunk_data: Dictionary = chunks[key]
+    # Создаём корневой узел секции.
+    var section_root := Node3D.new()
+    section_root.name = "Section_%d_%d_%d" % [
+        section_key.x,
+        section_key.y,
+        section_key.z
+    ]
 
-    var mesh_instance: MeshInstance3D = chunk_data.get("mesh_instance")
-    if is_instance_valid(mesh_instance):
-        mesh_instance.queue_free()
-
-    var body: StaticBody3D = chunk_data.get("physics_body")
-    if is_instance_valid(body):
-        body.collision_layer = 0
-        body.collision_mask = 0
-        body.queue_free()
-
-    chunk_data.erase("mesh_instance")
-    chunk_data.erase("physics_body")
-
-
-func rebuild_chunk_geometry(key: Vector3i) -> void:
-    if not chunks.has(key):
-        return
-
-    var chunk_data: Dictionary = chunks[key]
-
-    if not bool(chunk_data.get("generated", false)):
-        return
-
-    _clear_chunk_geometry(key)
-
-    var vertices := PackedVector3Array()
-    var normals := PackedVector3Array()
-
-    var origin := Vector3i(
-        key.x * CHUNK_SIZE,
-        key.y * CHUNK_SIZE,
-        key.z * CHUNK_SIZE
+    section_root.position = Vector3(
+        section_key * SECTION_SIZE
     )
 
-    # Пересобираем только один чанк.
-    for z in range(CHUNK_SIZE):
-        for y in range(CHUNK_SIZE):
-            for x in range(CHUNK_SIZE):
-                var cell := origin + Vector3i(x, y, z)
+    root.add_child(section_root)
 
-                if not is_solid(cell.x, cell.y, cell.z):
-                    continue
+    # ----------------------------------
+    # VISUAL MESH
+    # ----------------------------------
 
-                _append_cell_faces(cell, key, vertices, normals)
+    var mesh := ArrayMesh.new()
 
-    _finish_chunk_geometry(key, vertices, normals)
+    var arrays: Array = []
+    arrays.resize(Mesh.ARRAY_MAX)
+
+    arrays[Mesh.ARRAY_VERTEX] = vertices
+    arrays[Mesh.ARRAY_NORMAL] = normals
+
+    mesh.add_surface_from_arrays(
+        Mesh.PRIMITIVE_TRIANGLES,
+        arrays
+    )
+
+    mesh.surface_set_material(0, terrain_material)
+
+    var mesh_instance := MeshInstance3D.new()
+    mesh_instance.name = "SectionMesh"
+    mesh_instance.mesh = mesh
+
+    section_root.add_child(mesh_instance)
+
+    # ----------------------------------
+    # PHYSICS COLLISION
+    # ----------------------------------
+
+    var collision_shape := ConcavePolygonShape3D.new()
+    collision_shape.set_faces(vertices)
+
+    var body := StaticBody3D.new()
+    body.name = "SectionCollision"
+    body.collision_layer = 1
+    body.collision_mask = 1
+
+    var shape_node := CollisionShape3D.new()
+    shape_node.shape = collision_shape
+
+    body.add_child(shape_node)
+    section_root.add_child(body)
+
+    # Сохраняем секцию.
+    var sections: Dictionary = chunk_data["sections"]
+
+    sections[section_key] = {
+        "root": section_root,
+        "mesh_instance": mesh_instance,
+        "physics_body": body
+    }
+
+    chunk_data["sections"] = sections
+
 
 
 # -----------------------------------------------------------------------------
@@ -481,34 +519,34 @@ func destroy_block(cell: Vector3i) -> bool:
     if not is_solid(cell.x, cell.y, cell.z):
         return false
 
+    # Мгновенно изменяем данные планеты.
     destroyed_blocks[cell] = true
 
     var chunk_key := index_to_chunk(cell)
-    rebuild_chunk_geometry(chunk_key)
+    var section_key := get_section_key(cell)
 
-    var local_cell := Vector3i(
-        posmod(cell.x, CHUNK_SIZE),
-        posmod(cell.y, CHUNK_SIZE),
-        posmod(cell.z, CHUNK_SIZE)
-    )
+    # Перестраиваем секцию с разрушенным блоком.
+    rebuild_section_geometry(chunk_key, section_key)
 
-    if local_cell.x == 0:
-        rebuild_chunk_geometry(chunk_key + Vector3i.LEFT)
-    elif local_cell.x == CHUNK_SIZE - 1:
-        rebuild_chunk_geometry(chunk_key + Vector3i.RIGHT)
+    # Проверяем соседние секции.
+    for direction: Vector3i in DIRECTIONS:
+        var neighbor := cell + direction
 
-    if local_cell.y == 0:
-        rebuild_chunk_geometry(chunk_key + Vector3i.DOWN)
-    elif local_cell.y == CHUNK_SIZE - 1:
-        rebuild_chunk_geometry(chunk_key + Vector3i.UP)
+        var neighbor_chunk := index_to_chunk(neighbor)
+        var neighbor_section := get_section_key(neighbor)
 
-    if local_cell.z == 0:
-        rebuild_chunk_geometry(chunk_key + Vector3i(0, 0, -1))
-    elif local_cell.z == CHUNK_SIZE - 1:
-        rebuild_chunk_geometry(chunk_key + Vector3i(0, 0, 1))
+        # Если сосед находится в другой секции,
+        # её геометрия тоже могла измениться.
+        if (
+            neighbor_chunk != chunk_key
+            or neighbor_section != section_key
+        ):
+            rebuild_section_geometry(
+                neighbor_chunk,
+                neighbor_section
+            )
 
     return true
-
 
 func index_to_chunk(cell: Vector3i) -> Vector3i:
     return Vector3i(
@@ -727,21 +765,23 @@ func chunk_intersects_planet(key: Vector3i) -> bool:
 func create_chunk(key: Vector3i) -> void:
     var root := Node3D.new()
     root.name = "Chunk_%d_%d_%d" % [key.x, key.y, key.z]
+
     root.position = Vector3(
         key.x * CHUNK_SIZE,
         key.y * CHUNK_SIZE,
         key.z * CHUNK_SIZE
     )
+
     add_child(root)
 
     chunks[key] = {
         "root": root,
-        "blocks": {},
+        "sections": {},
         "request_id": -1,
         "generated": false
     }
-    enqueue_chunk(key, false)
 
+    enqueue_chunk(key, false)
 
 func unload_chunk(key: Vector3i) -> void:
     if not chunks.has(key):
@@ -809,3 +849,77 @@ func is_chunk_ready_at(world_position: Vector3) -> bool:
     var chunk_data: Dictionary = chunks[key]
 
     return bool(chunk_data.get("generated", false))
+
+func _clear_section_geometry(
+    chunk_key: Vector3i,
+    section_key: Vector3i
+) -> void:
+    if not chunks.has(chunk_key):
+        return
+
+    var chunk_data: Dictionary = chunks[chunk_key]
+    var sections: Dictionary = chunk_data["sections"]
+
+    if not sections.has(section_key):
+        return
+
+    var section_data: Dictionary = sections[section_key]
+
+    var root: Node3D = section_data["root"]
+
+    if is_instance_valid(root):
+        var body: StaticBody3D = section_data["physics_body"]
+
+        if is_instance_valid(body):
+            body.collision_layer = 0
+            body.collision_mask = 0
+
+        root.queue_free()
+
+    sections.erase(section_key)
+
+
+func rebuild_section_geometry(
+    chunk_key: Vector3i,
+    section_key: Vector3i
+) -> void:
+    if not chunks.has(chunk_key):
+        return
+
+    var chunk_data: Dictionary = chunks[chunk_key]
+
+    if not bool(chunk_data.get("generated", false)):
+        return
+
+    # Удаляем старую геометрию.
+    _clear_section_geometry(chunk_key, section_key)
+
+    var vertices := PackedVector3Array()
+    var normals := PackedVector3Array()
+
+    var origin := get_section_origin(chunk_key, section_key)
+
+    # Проверяем только 8×8×8 блоков.
+    for z in range(SECTION_SIZE):
+        for y in range(SECTION_SIZE):
+            for x in range(SECTION_SIZE):
+
+                var cell := origin + Vector3i(x, y, z)
+
+                if not is_solid(cell.x, cell.y, cell.z):
+                    continue
+
+                _append_cell_faces(
+                    cell,
+                    origin,
+                    vertices,
+                    normals
+                )
+
+    # Создаём новую геометрию.
+    _finish_section_geometry(
+        chunk_key,
+        section_key,
+        vertices,
+        normals
+    )
