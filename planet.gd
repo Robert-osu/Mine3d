@@ -94,6 +94,132 @@ var completed_section_data: Dictionary = {}
 var section_mutex := Mutex.new()
 var next_section_request_id: int = 0
 
+# Временные грани, появившиеся после разрушения блоков.
+# chunk_key -> section_key -> данные временной геометрии.
+
+
+func _add_temporary_face(
+    chunk_key: Vector3i,
+    section_key: Vector3i,
+    cell: Vector3i,
+    face_index: int
+) -> void:
+
+    if not chunks.has(chunk_key):
+        return
+
+    var chunk_data: Dictionary = chunks[chunk_key]
+    var chunk_root: Node3D = chunk_data["root"]
+
+    var temporary_faces: Dictionary = chunk_data.get(
+        "temporary_faces",
+        {}
+    )
+
+    var face_data: Dictionary = temporary_faces.get(
+        section_key,
+        {}
+    )
+
+    # Создаём временный узел секции, если его ещё нет.
+    if face_data.is_empty():
+        var section_root := Node3D.new()
+        section_root.name = "TemporaryFaces"
+
+        section_root.position = Vector3(
+            section_key * SECTION_SIZE
+        )
+
+        chunk_root.add_child(section_root)
+
+        var mesh_instance := MeshInstance3D.new()
+        section_root.add_child(mesh_instance)
+
+        face_data = {
+            "root": section_root,
+            "mesh_instance": mesh_instance,
+            "vertices": PackedVector3Array(),
+            "normals": PackedVector3Array()
+        }
+
+    var vertices: PackedVector3Array = face_data["vertices"]
+    var normals: PackedVector3Array = face_data["normals"]
+
+    # Координаты блока относительно секции.
+    var block_origin := Vector3(cell - get_section_origin(
+        chunk_key,
+        section_key
+    ))
+
+    var face: Array = FACE_VERTICES[face_index]
+
+    var a: Vector3 = block_origin + face[0]
+    var b: Vector3 = block_origin + face[1]
+    var c: Vector3 = block_origin + face[2]
+    var d: Vector3 = block_origin + face[3]
+
+    vertices.append_array([
+        a, c, b,
+        a, d, c
+    ])
+
+    for i in range(6):
+        normals.append(FACE_NORMALS[face_index])
+
+    face_data["vertices"] = vertices
+    face_data["normals"] = normals
+
+    # Обновляем только маленький временный меш.
+    var mesh := ArrayMesh.new()
+
+    var arrays: Array = []
+    arrays.resize(Mesh.ARRAY_MAX)
+
+    arrays[Mesh.ARRAY_VERTEX] = vertices
+    arrays[Mesh.ARRAY_NORMAL] = normals
+
+    mesh.add_surface_from_arrays(
+        Mesh.PRIMITIVE_TRIANGLES,
+        arrays
+    )
+
+    mesh.surface_set_material(0, terrain_material)
+
+    var mesh_instance: MeshInstance3D = face_data["mesh_instance"]
+    mesh_instance.mesh = mesh
+
+    temporary_faces[section_key] = face_data
+    chunk_data["temporary_faces"] = temporary_faces
+
+
+func _clear_temporary_section_faces(
+    chunk_key: Vector3i,
+    section_key: Vector3i
+) -> void:
+
+    if not chunks.has(chunk_key):
+        return
+
+    var chunk_data: Dictionary = chunks[chunk_key]
+
+    var temporary_faces: Dictionary = chunk_data.get(
+        "temporary_faces",
+        {}
+    )
+
+    if not temporary_faces.has(section_key):
+        return
+
+    var face_data: Dictionary = temporary_faces[section_key]
+    var root: Node3D = face_data["root"]
+
+    if is_instance_valid(root):
+        root.queue_free()
+
+    temporary_faces.erase(section_key)
+    chunk_data["temporary_faces"] = temporary_faces
+
+
 
 func _ready() -> void:
     SIZE = 32 * planet_scale
@@ -219,9 +345,6 @@ func queue_section_rebuild(
 
     var chunk_data: Dictionary = chunks[chunk_key]
 
-    if not bool(chunk_data.get("generated", false)):
-        return
-
     var section_id := make_section_id(
         chunk_key,
         section_key
@@ -241,19 +364,25 @@ func queue_section_rebuild(
     queued_sections[section_id] = true
     section_queue.append(section_id)
 
+
 func start_section_jobs() -> void:
     var started: int = 0
+    
+    # Проверяем не больше тех секций, которые были в очереди
+    # в начале вызова. Это защищает от бесконечного перебора.
+    var sections_to_check: int = section_queue.size()
 
     while (
         started < MAX_SECTION_JOBS_PER_FRAME
         and active_section_requests.size() < MAX_PARALLEL_SECTION_JOBS
         and not section_queue.is_empty()
+        and sections_to_check > 0
     ):
+        sections_to_check -= 1
 
         var section_id: Vector3i = section_queue.pop_front()
         queued_sections.erase(section_id)
 
-        # Разбираем глобальные координаты секции.
         var chunk_key := Vector3i(
             floori(float(section_id.x) / SECTIONS_PER_CHUNK),
             floori(float(section_id.y) / SECTIONS_PER_CHUNK),
@@ -269,24 +398,26 @@ func start_section_jobs() -> void:
         if not chunks.has(chunk_key):
             continue
 
-        # Не запускаем вторую задачу для той же секции.
+        # Если секция уже перестраивается, оставляем её в очереди,
+        # но проверяем следующие секции.
         if active_section_requests.has(section_id):
             if not queued_sections.has(section_id):
                 queued_sections[section_id] = true
                 section_queue.append(section_id)
-
-            break
+            continue
 
         var chunk_data: Dictionary = chunks[chunk_key]
 
+        # Неготовую секцию откладываем в конец очереди.
         if not bool(chunk_data.get("generated", false)):
+            queued_sections[section_id] = true
+            section_queue.append(section_id)
             continue
 
         var version: int = int(
             section_versions.get(section_id, 0)
         )
 
-        # Снимаем состояние блоков в главном потоке.
         var snapshot := create_section_snapshot(
             chunk_key,
             section_key
@@ -313,6 +444,7 @@ func start_section_jobs() -> void:
         section_worker_task_ids[task_id] = request_id
 
         started += 1
+
 
 func collect_finished_section_tasks() -> void:
     var finished_ids: Array[int] = []
@@ -369,13 +501,11 @@ func apply_completed_section_data() -> void:
         if not bool(chunk_data.get("generated", false)):
             continue
 
-        # Удаляем старую геометрию.
-        _clear_section_geometry(
+        _clear_temporary_section_faces(
             chunk_key,
             section_key
         )
 
-        # Устанавливаем новую.
         _finish_section_geometry(
             chunk_key,
             section_key,
@@ -503,12 +633,7 @@ func _build_visible_cells(
                 var block_center := Vector3(cell) + Vector3.ONE * 0.5
                 var distance_squared := block_center.distance_squared_to(center)
 
-                # Пропускаем блоки глубоко под поверхностью.
-                var inner_radius := maxf(0.0, RADIUS - BLOCK_SIZE)
-
-                if distance_squared < inner_radius * inner_radius:
-                    continue
-
+                # Пропускаем только блоки за пределами планеты.
                 if distance_squared > RADIUS * RADIUS:
                     continue
 
@@ -754,6 +879,7 @@ func _finish_section_geometry(
 
     # Пустая секция не нуждается в меше.
     if vertices.is_empty():
+        _clear_section_geometry(chunk_key, section_key)
         return
 
     # Создаём корневой узел секции.
@@ -816,6 +942,10 @@ func _finish_section_geometry(
     # Сохраняем секцию.
     var sections: Dictionary = chunk_data["sections"]
 
+    # Сохраняем старую секцию до установки новой.
+    var old_section: Dictionary = sections.get(section_key, {})
+
+    # Устанавливаем новую геометрию.
     sections[section_key] = {
         "root": section_root,
         "mesh_instance": mesh_instance,
@@ -823,6 +953,13 @@ func _finish_section_geometry(
     }
 
     chunk_data["sections"] = sections
+
+    # Только теперь удаляем старую геометрию.
+    if not old_section.is_empty():
+        var old_root: Node3D = old_section.get("root")
+
+        if is_instance_valid(old_root):
+            old_root.queue_free()
 
 
 
@@ -851,28 +988,46 @@ func is_solid(x: int, y: int, z: int) -> bool:
 
 
 
+
 func destroy_block(cell: Vector3i) -> bool:
     if not is_solid(cell.x, cell.y, cell.z):
         return false
 
-    # Мгновенно изменяем данные планеты.
     destroyed_blocks[cell] = true
 
     var chunk_key := index_to_chunk(cell)
     var section_key := get_section_key(cell)
 
-    # Перестраиваем секцию с разрушенным блоком.
+    # Перестраиваем секцию разрушенного блока.
     rebuild_section_geometry(chunk_key, section_key)
 
-    # Проверяем соседние секции.
-    for direction: Vector3i in DIRECTIONS:
+    # Открываем грани соседних блоков немедленно.
+    for direction_index in range(6):
+        var direction: Vector3i = DIRECTIONS[direction_index]
         var neighbor := cell + direction
+
+        if not is_solid(
+            neighbor.x,
+            neighbor.y,
+            neighbor.z
+        ):
+            continue
 
         var neighbor_chunk := index_to_chunk(neighbor)
         var neighbor_section := get_section_key(neighbor)
 
+        # Грань соседа, направленная к разрушенному блоку.
+        var face_index: int = direction_index ^ 1
+
+        _add_temporary_face(
+            neighbor_chunk,
+            neighbor_section,
+            neighbor,
+            face_index
+        )
+
         # Если сосед находится в другой секции,
-        # её геометрия тоже могла измениться.
+        # ставим её на фоновую перестройку.
         if (
             neighbor_chunk != chunk_key
             or neighbor_section != section_key
@@ -883,6 +1038,7 @@ func destroy_block(cell: Vector3i) -> bool:
             )
 
     return true
+
 
 func index_to_chunk(cell: Vector3i) -> Vector3i:
     return Vector3i(
