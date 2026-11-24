@@ -626,48 +626,107 @@ func _build_visible_cells(
     request_id: int
 ) -> void:
 
-    # Здесь будут готовые вершины и нормали каждой секции.
-    var section_build_data: Dictionary = {}
+    const SNAP_SIZE := CHUNK_SIZE + 2
+    const SNAP_AREA := SNAP_SIZE * SNAP_SIZE
+    const SNAP_VOLUME := SNAP_AREA * SNAP_SIZE
+
+    # 1. Создаём компактную карту заполненности чанка.
+    # Внешний слой нужен для проверки соседей на границах.
+    var occupancy := PackedByteArray()
+    occupancy.resize(SNAP_VOLUME)
+
+    var has_deltas := not delta_snapshot.is_empty()
 
     var half_size := float(SIZE) * 0.5
     var radius_squared := RADIUS * RADIUS
-    var has_deltas := not delta_snapshot.is_empty()
 
     var chunk_origin := key * CHUNK_SIZE
 
-    for z in range(CHUNK_SIZE):
+    # Заполняем карту один раз.
+    for z in range(-1, CHUNK_SIZE + 1):
         var gz := chunk_origin.z + z
         var dz := float(gz) + 0.5 - half_size
         var dz_squared := dz * dz
 
-        for y in range(CHUNK_SIZE):
+        for y in range(-1, CHUNK_SIZE + 1):
             var gy := chunk_origin.y + y
             var dy := float(gy) + 0.5 - half_size
             var dyz_squared := dy * dy + dz_squared
 
-            for x in range(CHUNK_SIZE):
+            for x in range(-1, CHUNK_SIZE + 1):
                 var gx := chunk_origin.x + x
+
+                if (
+                    gx < 0 or gx >= SIZE
+                    or gy < 0 or gy >= SIZE
+                    or gz < 0 or gz >= SIZE
+                ):
+                    continue
+
                 var dx := float(gx) + 0.5 - half_size
 
                 if dx * dx + dyz_squared > radius_squared:
                     continue
 
-                var cell := Vector3i(gx, gy, gz)
+                # Проверяем разрушение блока.
+                if has_deltas:
+                    var section_id := Vector3i(
+                        floori(float(gx) / SECTION_SIZE),
+                        floori(float(gy) / SECTION_SIZE),
+                        floori(float(gz) / SECTION_SIZE)
+                    )
 
-                if not _is_solid_snapshot(
-                    cell,
-                    half_size,
-                    radius_squared,
-                    delta_snapshot,
-                    has_deltas
-                ):
+                    if delta_snapshot.has(section_id):
+                        var delta: PackedByteArray = delta_snapshot[section_id]
+
+                        var local_index := (
+                            posmod(gz, SECTION_SIZE) * SECTION_SIZE * SECTION_SIZE
+                            + posmod(gy, SECTION_SIZE) * SECTION_SIZE
+                            + posmod(gx, SECTION_SIZE)
+                        )
+
+                        if delta[local_index] != 0:
+                            continue
+
+                var index := (
+                    (z + 1) * SNAP_AREA
+                    + (y + 1) * SNAP_SIZE
+                    + (x + 1)
+                )
+
+                occupancy[index] = 1
+
+    # 2. Строим геометрию, используя только готовую карту.
+    var section_build_data: Dictionary = {}
+
+    # Смещения соседей в линейном массиве.
+    var neighbor_offsets: Array[int] = [
+        1,
+        -1,
+        SNAP_SIZE,
+        -SNAP_SIZE,
+        SNAP_AREA,
+        -SNAP_AREA
+    ]
+
+    for z in range(CHUNK_SIZE):
+        for y in range(CHUNK_SIZE):
+            for x in range(CHUNK_SIZE):
+
+                var center_index := (
+                    (z + 1) * SNAP_AREA
+                    + (y + 1) * SNAP_SIZE
+                    + (x + 1)
+                )
+
+                if occupancy[center_index] == 0:
                     continue
 
-                # Определяем секцию внутри чанка.
+                # Секция внутри чанка.
                 var section_key := Vector3i(
-                    floori(float(x) / SECTION_SIZE),
-                    floori(float(y) / SECTION_SIZE),
-                    floori(float(z) / SECTION_SIZE)
+                    x / SECTION_SIZE,
+                    y / SECTION_SIZE,
+                    z / SECTION_SIZE
                 )
 
                 var section_data: Dictionary = section_build_data.get(
@@ -681,25 +740,20 @@ func _build_visible_cells(
                 var vertices: PackedVector3Array = section_data["vertices"]
                 var normals: PackedVector3Array = section_data["normals"]
 
-                # Координаты блока относительно секции.
                 var block_origin := Vector3(
-                    posmod(x, SECTION_SIZE),
-                    posmod(y, SECTION_SIZE),
-                    posmod(z, SECTION_SIZE)
+                    x % SECTION_SIZE,
+                    y % SECTION_SIZE,
+                    z % SECTION_SIZE
                 )
 
-                # Проверяем шесть соседей и добавляем открытые грани.
+                # Добавляем только открытые грани.
                 for face_index in range(6):
-                    var direction: Vector3i = DIRECTIONS[face_index]
-                    var neighbor := cell + direction
 
-                    if _is_solid_snapshot(
-                        neighbor,
-                        half_size,
-                        radius_squared,
-                        delta_snapshot,
-                        has_deltas
-                    ):
+                    var neighbor_index := (
+                        center_index + neighbor_offsets[face_index]
+                    )
+
+                    if occupancy[neighbor_index] != 0:
                         continue
 
                     var face: Array = FACE_VERTICES[face_index]
@@ -722,7 +776,7 @@ func _build_visible_cells(
 
                 section_build_data[section_key] = section_data
 
-    # Передаём готовую геометрию главному потоку.
+    # 3. Передаём готовые данные главному потоку.
     completed_mutex.lock()
 
     completed_chunk_data[request_id] = {
