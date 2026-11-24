@@ -13,6 +13,8 @@ class_name Planet
 @export_group("Visual")
 @export var terrain_color: Color = Color("#8b765e")
 
+@export_range(1, 16) var sections_per_frame: int = 2
+
 const CHUNK_SIZE: int = 32
 const BLOCK_SIZE: float = 1.0
 
@@ -623,7 +625,9 @@ func _build_visible_cells(
     delta_snapshot: Dictionary,
     request_id: int
 ) -> void:
-    var visible_cells: Array[Vector3i] = []
+
+    # Здесь будут готовые вершины и нормали каждой секции.
+    var section_build_data: Dictionary = {}
 
     var half_size := float(SIZE) * 0.5
     var radius_squared := RADIUS * RADIUS
@@ -645,53 +649,86 @@ func _build_visible_cells(
                 var gx := chunk_origin.x + x
                 var dx := float(gx) + 0.5 - half_size
 
-                # Проверяем принадлежность сфере без Vector3.
                 if dx * dx + dyz_squared > radius_squared:
                     continue
 
-                # Проверяем разрушение блока.
-                if has_deltas:
-                    var section_id := Vector3i(
-                        key.x * SECTIONS_PER_CHUNK + x / SECTION_SIZE,
-                        key.y * SECTIONS_PER_CHUNK + y / SECTION_SIZE,
-                        key.z * SECTIONS_PER_CHUNK + z / SECTION_SIZE
-                    )
-
-                    if delta_snapshot.has(section_id):
-                        var local_index := (
-                            (z % SECTION_SIZE) * SECTION_SIZE * SECTION_SIZE
-                            + (y % SECTION_SIZE) * SECTION_SIZE
-                            + (x % SECTION_SIZE)
-                        )
-
-                        var delta: PackedByteArray = delta_snapshot[section_id]
-
-                        if delta[local_index] != 0:
-                            continue
-
                 var cell := Vector3i(gx, gy, gz)
-                var exposed := false
 
-                for direction: Vector3i in DIRECTIONS:
-                    if not _is_solid_snapshot(
-                        cell + direction,
+                if not _is_solid_snapshot(
+                    cell,
+                    half_size,
+                    radius_squared,
+                    delta_snapshot,
+                    has_deltas
+                ):
+                    continue
+
+                # Определяем секцию внутри чанка.
+                var section_key := Vector3i(
+                    floori(float(x) / SECTION_SIZE),
+                    floori(float(y) / SECTION_SIZE),
+                    floori(float(z) / SECTION_SIZE)
+                )
+
+                var section_data: Dictionary = section_build_data.get(
+                    section_key,
+                    {
+                        "vertices": PackedVector3Array(),
+                        "normals": PackedVector3Array()
+                    }
+                )
+
+                var vertices: PackedVector3Array = section_data["vertices"]
+                var normals: PackedVector3Array = section_data["normals"]
+
+                # Координаты блока относительно секции.
+                var block_origin := Vector3(
+                    posmod(x, SECTION_SIZE),
+                    posmod(y, SECTION_SIZE),
+                    posmod(z, SECTION_SIZE)
+                )
+
+                # Проверяем шесть соседей и добавляем открытые грани.
+                for face_index in range(6):
+                    var direction: Vector3i = DIRECTIONS[face_index]
+                    var neighbor := cell + direction
+
+                    if _is_solid_snapshot(
+                        neighbor,
                         half_size,
                         radius_squared,
                         delta_snapshot,
                         has_deltas
                     ):
-                        exposed = true
-                        break
+                        continue
 
-                if exposed:
-                    visible_cells.append(cell)
+                    var face: Array = FACE_VERTICES[face_index]
 
+                    var a: Vector3 = block_origin + face[0]
+                    var b: Vector3 = block_origin + face[1]
+                    var c: Vector3 = block_origin + face[2]
+                    var d: Vector3 = block_origin + face[3]
+
+                    vertices.append_array([
+                        a, c, b,
+                        a, d, c
+                    ])
+
+                    for i in range(6):
+                        normals.append(FACE_NORMALS[face_index])
+
+                section_data["vertices"] = vertices
+                section_data["normals"] = normals
+
+                section_build_data[section_key] = section_data
+
+    # Передаём готовую геометрию главному потоку.
     completed_mutex.lock()
 
     completed_chunk_data[request_id] = {
         "key": key,
         "request_id": request_id,
-        "visible_cells": visible_cells
+        "section_build_data": section_build_data
     }
 
     completed_mutex.unlock()
@@ -739,6 +776,7 @@ func _is_destroyed_snapshot(
 
 func apply_completed_chunk_data() -> void:
     completed_mutex.lock()
+
     if completed_chunk_data.is_empty():
         completed_mutex.unlock()
         return
@@ -746,7 +784,9 @@ func apply_completed_chunk_data() -> void:
     var result_ids: Array = completed_chunk_data.keys()
     var result_id: int = int(result_ids[0])
     var result: Dictionary = completed_chunk_data[result_id]
+
     completed_chunk_data.erase(result_id)
+
     completed_mutex.unlock()
 
     var key: Vector3i = result["key"]
@@ -759,15 +799,19 @@ func apply_completed_chunk_data() -> void:
         return
 
     var chunk_data: Dictionary = chunks[key]
+
     if int(chunk_data["request_id"]) != request_id:
         return
 
-    chunk_data["pending_cells"] = result["visible_cells"]
-    chunk_data["build_cursor"] = 0
-    chunk_data["section_build_data"] = {}
+    var section_build_data: Dictionary = result["section_build_data"]
+
+    chunk_data["pending_section_data"] = section_build_data
+    chunk_data["pending_section_keys"] = section_build_data.keys()
+    chunk_data["section_build_cursor"] = 0
 
 func process_pending_block_creation() -> void:
-    var budget: int = blocks_per_frame
+    var budget: int = sections_per_frame
+
     var chunk_keys: Array = chunks.keys()
     chunk_keys.sort_custom(_sort_chunk_keys_near_player)
 
@@ -782,70 +826,36 @@ func process_pending_block_creation() -> void:
 
         var chunk_data: Dictionary = chunks[key]
 
-        if not chunk_data.has("pending_cells"):
+        if not chunk_data.has("pending_section_keys"):
             continue
 
-        var pending_cells: Array = chunk_data["pending_cells"]
-        var cursor: int = int(chunk_data["build_cursor"])
+        var section_keys: Array = chunk_data["pending_section_keys"]
+        var section_build_data: Dictionary = chunk_data["pending_section_data"]
 
-        var section_build_data: Dictionary = chunk_data.get(
-            "section_build_data",
-            {}
-        )
+        var cursor: int = int(chunk_data["section_build_cursor"])
 
-        while cursor < pending_cells.size() and budget > 0:
-            var cell: Vector3i = pending_cells[cursor]
+        while cursor < section_keys.size() and budget > 0:
+            var section_key: Vector3i = section_keys[cursor]
+
+            var section_data: Dictionary = section_build_data[section_key]
+
+            _finish_section_geometry(
+                key,
+                section_key,
+                section_data["vertices"],
+                section_data["normals"]
+            )
+
             cursor += 1
             budget -= 1
 
-            if not is_solid(cell.x, cell.y, cell.z):
-                continue
+        chunk_data["section_build_cursor"] = cursor
 
-            var section_key := get_section_key(cell)
+        if cursor >= section_keys.size():
+            chunk_data.erase("pending_section_keys")
+            chunk_data.erase("pending_section_data")
+            chunk_data.erase("section_build_cursor")
 
-            var section_data: Dictionary = section_build_data.get(
-                section_key,
-                {
-                    "vertices": PackedVector3Array(),
-                    "normals": PackedVector3Array()
-                }
-            )
-
-            var vertices: PackedVector3Array = section_data["vertices"]
-            var normals: PackedVector3Array = section_data["normals"]
-
-            _append_cell_faces(
-                cell,
-                get_section_origin(key, section_key),
-                vertices,
-                normals
-            )
-
-            section_data["vertices"] = vertices
-            section_data["normals"] = normals
-
-            section_build_data[section_key] = section_data
-
-        chunk_data["build_cursor"] = cursor
-        chunk_data["section_build_data"] = section_build_data
-
-        if cursor >= pending_cells.size():
-            chunk_data.erase("pending_cells")
-            chunk_data.erase("build_cursor")
-
-            # Создаём геометрию каждой готовой секции.
-            for section_key_variant in section_build_data.keys():
-                var section_key: Vector3i = section_key_variant
-                var section_data: Dictionary = section_build_data[section_key]
-
-                _finish_section_geometry(
-                    key,
-                    section_key,
-                    section_data["vertices"],
-                    section_data["normals"]
-                )
-
-            chunk_data.erase("section_build_data")
             chunk_data["generated"] = true
 
 func get_section_key(cell: Vector3i) -> Vector3i:
