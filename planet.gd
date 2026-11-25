@@ -1222,6 +1222,16 @@ func mine(
     var distance: float = 0.0
     while distance <= max_distance:
         if is_solid(cell.x, cell.y, cell.z):
+            var chunk_key := index_to_chunk(cell)
+
+            if not chunks.has(chunk_key):
+                return false
+
+            var chunk_data: Dictionary = chunks[chunk_key]
+
+            if not bool(chunk_data.get("generated", false)):
+                return false
+
             return destroy_block(cell)
 
         if t_max.x < t_max.y and t_max.x < t_max.z:
@@ -1604,3 +1614,138 @@ func create_chunk_delta_snapshot(
 
     return result
 
+
+# ============================================================
+# DEBUG STATISTICS
+# ============================================================
+
+func get_debug_stats() -> Dictionary:
+    var generated_chunks := 0
+    var generating_chunks := 0
+    var pending_initial_sections := 0
+    var temporary_sections := 0
+
+    # Статистика загруженных чанков.
+    for chunk_key in chunks:
+        var chunk_data: Dictionary = chunks[chunk_key]
+
+        if bool(chunk_data.get("generated", false)):
+            generated_chunks += 1
+        else:
+            generating_chunks += 1
+
+        # Секции, которые ещё предстоит создать
+        # при первоначальной генерации чанка.
+        var pending_keys: Array = chunk_data.get(
+            "pending_section_keys", []
+        )
+        var build_cursor: int = int(
+            chunk_data.get("section_build_cursor", 0)
+        )
+
+        pending_initial_sections += maxi(
+            0,
+            pending_keys.size() - build_cursor
+        )
+
+        # Секции с временной геометрией после копания.
+        var temp_faces: Dictionary = chunk_data.get(
+            "temporary_faces", {}
+        )
+        temporary_sections += temp_faces.size()
+
+    # Получаем количество результатов, ожидающих обработки.
+    # Словари защищены Mutex, поэтому читаем их под блокировкой.
+    completed_mutex.lock()
+    var waiting_chunk_results := completed_chunk_data.size()
+    completed_mutex.unlock()
+
+    section_mutex.lock()
+    var waiting_section_results := completed_section_data.size()
+    section_mutex.unlock()
+
+    # Производительность.
+    var fps := Engine.get_frames_per_second()
+
+    var process_ms := (
+        Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+    )
+
+    var physics_ms := (
+        Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+    )
+
+    var physics_objects := Performance.get_monitor(
+        Performance.PHYSICS_3D_ACTIVE_OBJECTS
+    )
+
+    var collision_pairs := Performance.get_monitor(
+        Performance.PHYSICS_3D_COLLISION_PAIRS
+    )
+
+    # Формируем текстовые блоки для интерфейса.
+    var performance_text := """
+FPS: %d
+Process: %.2f ms
+Physics: %.2f ms
+Physics objects: %d
+Collision pairs: %d
+""" % [
+        fps,
+        process_ms,
+        physics_ms,
+        physics_objects,
+        collision_pairs
+    ]
+
+    var chunk_text := """
+Loaded chunks: %d
+Generated chunks: %d
+Generating chunks: %d
+
+Chunk queue: %d
+Chunk worker tasks: %d
+Active chunk requests: %d
+Waiting chunk results: %d
+
+Initial sections pending: %d
+Center chunk: %s
+""" % [
+        chunks.size(),
+        generated_chunks,
+        generating_chunks,
+
+        chunk_queue.size(),
+        worker_task_ids.size(),
+        active_chunk_requests.size(),
+        waiting_chunk_results,
+
+        pending_initial_sections,
+        str(last_center_chunk)
+    ]
+
+    var section_text := """
+Section queue: %d
+Queued sections: %d
+
+Section worker tasks: %d
+Active section requests: %d
+Waiting section results: %d
+
+Temporary sections: %d
+""" % [
+        section_queue.size(),
+        queued_sections.size(),
+
+        section_worker_task_ids.size(),
+        active_section_requests.size(),
+        waiting_section_results,
+
+        temporary_sections
+    ]
+
+    return {
+        "performance": performance_text,
+        "chunks": chunk_text,
+        "sections": section_text
+    }

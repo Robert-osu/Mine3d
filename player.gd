@@ -22,6 +22,7 @@ extends CharacterBody3D
 
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
+# @onready var coord_label: Label = $Player/DebugPanel/VBoxContainer/CoordLabel
 
 var vertical_speed := 0.0
 var heading := Vector3.FORWARD
@@ -30,214 +31,224 @@ var spawn_ready := false
 
 
 func _ready() -> void:
-    if planet == null:
-        push_error("Assign Planet in Player Inspector!")
-        return
+	if planet == null:
+		push_error("Assign Planet in Player Inspector!")
+		return
 
-    var center := planet.to_global(planet.get_planet_center())
+	# $DebugPanel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# coord_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-    var spawn_direction := Vector3.UP
+	var center := planet.to_global(planet.get_planet_center())
 
-    # Радиус планеты + небольшой запас над поверхностью.
-    var spawn_distance := planet.RADIUS + 2.0
+	var spawn_direction := Vector3.UP
 
-    var direction := Vector3.UP
+	# Радиус планеты + небольшой запас над поверхностью.
+	var spawn_distance := planet.RADIUS + 2.0
 
-    var surface_point := center + direction * (planet.RADIUS - 0.5)
+	var direction := Vector3.UP
 
-    global_position = center + direction * (planet.RADIUS + 3.0)
+	var surface_point := center + direction * (planet.RADIUS - 0.5)
 
-    planet.update_streaming(global_position)
+	global_position = center + direction * (planet.RADIUS + 3.0)
 
-    while not planet.has_collision_at(surface_point):
-        await get_tree().process_frame
+	planet.update_streaming(global_position)
 
-    spawn_ready = true
+	while not planet.has_collision_at(surface_point):
+		await get_tree().process_frame
 
-    heading = Vector3.FORWARD.slide(spawn_direction).normalized()
+	spawn_ready = true
 
-    up_direction = spawn_direction
-    update_orientation(spawn_direction)
+	heading = Vector3.FORWARD.slide(spawn_direction).normalized()
 
-    # Камера находится непосредственно на персонаже.
-    camera_pivot.position = Vector3(0, camera_height, 0)
-    camera_pivot.rotation = Vector3.ZERO
+	up_direction = spawn_direction
+	update_orientation(spawn_direction)
 
-    camera.position = Vector3.ZERO
-    camera.rotation = Vector3.ZERO
-    camera.make_current()
+	# Камера находится непосредственно на персонаже.
+	camera_pivot.position = Vector3(0, camera_height, 0)
+	camera_pivot.rotation = Vector3.ZERO
 
-    create_flashlight()
+	camera.position = Vector3.ZERO
+	camera.rotation = Vector3.ZERO
+	camera.make_current()
 
-    Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	create_flashlight()
+
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func create_flashlight() -> void:
-    var flashlight := SpotLight3D.new()
+	var flashlight := SpotLight3D.new()
 
-    flashlight.name = "Flashlight"
-    flashlight.position = Vector3.ZERO
-    flashlight.rotation = Vector3.ZERO
+	flashlight.name = "Flashlight"
+	flashlight.position = Vector3.ZERO
+	flashlight.rotation = Vector3.ZERO
 
-    flashlight.spot_range = flashlight_range
-    flashlight.spot_angle = flashlight_angle
-    flashlight.light_energy = flashlight_energy
+	flashlight.spot_range = flashlight_range
+	flashlight.spot_angle = flashlight_angle
+	flashlight.light_energy = flashlight_energy
 
-    flashlight.spot_attenuation = 1.0
-    flashlight.shadow_enabled = true
-    flashlight.light_color = Color(0.85, 0.92, 1.0)
+	flashlight.spot_attenuation = 1.0
+	flashlight.shadow_enabled = true
+	flashlight.light_color = Color(0.85, 0.92, 1.0)
 
-    camera.add_child(flashlight)
+	camera.add_child(flashlight)
 
 
 func _unhandled_input(event: InputEvent) -> void:
-    if event is InputEventMouseMotion:
-        if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-            if planet != null:
-                var center := planet.to_global(Vector3(planet.SIZE / 2.0, planet.SIZE / 2.0, planet.SIZE / 2.0))
-                var up := (global_position - center).normalized()
+	if event is InputEventMouseMotion:
+		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			if planet != null:
+				var center := planet.to_global(Vector3(planet.SIZE / 2.0, planet.SIZE / 2.0, planet.SIZE / 2.0))
+				var up := (global_position - center).normalized()
 
-                # Поворачиваем персонажа по горизонтали.
-                heading = heading.rotated(
-                    up,
-                    -event.relative.x * mouse_sensitivity
-                ).normalized()
+				# Поворачиваем персонажа по горизонтали.
+				heading = heading.rotated(
+					up,
+					-event.relative.x * mouse_sensitivity
+				).normalized()
 
-            # Вертикальный поворот только камеры.
-            camera_pivot.rotation.x -= event.relative.y * mouse_sensitivity
+			# Вертикальный поворот только камеры.
+			camera_pivot.rotation.x -= event.relative.y * mouse_sensitivity
 
-            camera_pivot.rotation.x = clampf(
-                camera_pivot.rotation.x,
-                deg_to_rad(min_pitch),
-                deg_to_rad(max_pitch)
-            )
+			camera_pivot.rotation.x = clampf(
+				camera_pivot.rotation.x,
+				deg_to_rad(min_pitch),
+				deg_to_rad(max_pitch)
+			)
 
-    if event is InputEventKey:
-        if event.pressed and event.keycode == KEY_ESCAPE:
-            Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if event is InputEventKey:
+		if event.pressed and event.keycode == KEY_ESCAPE:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
-    if event is InputEventMouseButton:
-        if event.pressed:
-            if event.button_index == MOUSE_BUTTON_LEFT:
-                if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-                    mining_requested = true
+	if event is InputEventMouseButton:
+		if event.pressed:
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+					mining_requested = true
 
-            if event.button_index == MOUSE_BUTTON_RIGHT:
-                if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
-                    Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-
+			if event.button_index == MOUSE_BUTTON_RIGHT:
+				if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
+					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	
 
 func _physics_process(delta: float) -> void:
-    if not spawn_ready:
-        return
+	if not spawn_ready:
+		return
 
-    if planet == null:
-        return
+	if planet == null:
+		return
 
-    var center := planet.to_global(planet.get_planet_center())
-    var up := (global_position - center).normalized()
+	# var local_pos := planet.to_local(global_position)
 
-    up_direction = up
+	# coord_label.text = "X: %.2f\nY: %.2f\nZ: %.2f" % [
+	# 	local_pos.x,
+	# 	local_pos.y,
+	# 	local_pos.z
+	# ]
 
-    update_orientation(up)
+	var center := planet.to_global(planet.get_planet_center())
+	var up := (global_position - center).normalized()
 
-    # Управление относительно направления взгляда.
-    var input := Input.get_vector(
-        "move_left",
-        "move_right",
-        "move_forward",
+	up_direction = up
+
+	update_orientation(up)
+
+	# Управление относительно направления взгляда.
+	var input := Input.get_vector(
+		"move_left",
+		"move_right",
+		"move_forward",
         "move_backward"
-    )
+	)
 
-    var camera_forward := -camera.global_basis.z
-    var camera_right := camera.global_basis.x
+	var camera_forward := -camera.global_basis.z
+	var camera_right := camera.global_basis.x
 
-    camera_forward = camera_forward.slide(up).normalized()
-    camera_right = camera_right.slide(up).normalized()
+	camera_forward = camera_forward.slide(up).normalized()
+	camera_right = camera_right.slide(up).normalized()
 
-    var move_direction := (
-        camera_right * input.x
-        + camera_forward * -input.y
-    ).normalized()
+	var move_direction := (
+		camera_right * input.x
+		+ camera_forward * -input.y
+	).normalized()
 
-    
+	
 
-    var horizontal_velocity := velocity.slide(up)
+	var horizontal_velocity := velocity.slide(up)
 
-    if move_direction.length_squared() > 0.001:
-        horizontal_velocity = horizontal_velocity.move_toward(
-            move_direction * move_speed,
-            acceleration * delta
-        )
-    else:
-        horizontal_velocity = horizontal_velocity.move_toward(
-            Vector3.ZERO,
-            acceleration * delta
-        )
+	if move_direction.length_squared() > 0.001:
+		horizontal_velocity = horizontal_velocity.move_toward(
+			move_direction * move_speed,
+			acceleration * delta
+		)
+	else:
+		horizontal_velocity = horizontal_velocity.move_toward(
+			Vector3.ZERO,
+			acceleration * delta
+		)
 
-    # Гравитация.
-    if Input.is_action_just_pressed("jump") and is_on_floor():
-        vertical_speed = jump_force
-    elif not is_on_floor():
-        vertical_speed -= gravity * delta
+	# Гравитация.
+	if Input.is_action_just_pressed("jump") and is_on_floor():
+		vertical_speed = jump_force
+	elif not is_on_floor():
+		vertical_speed -= gravity * delta
 
-    velocity = horizontal_velocity + up * vertical_speed
+	velocity = horizontal_velocity + up * vertical_speed
 
-    # Проверяем готовность поверхности только рядом с землёй.
-    # В воздухе незагруженные чанки не должны останавливать игрока.
-    var altitude := global_position.distance_to(center) - planet.RADIUS
+	# Проверяем готовность поверхности только рядом с землёй.
+	# В воздухе незагруженные чанки не должны останавливать игрока.
+	var altitude := global_position.distance_to(center) - planet.RADIUS
 
-    if altitude < 3.0 and vertical_speed < 0.0:
-        var ground_position := center + up * (planet.RADIUS - 0.5)
+	if altitude < 3.0 and vertical_speed < 0.0:
+		# Проверяем чанк непосредственно под персонажем.
+		var ground_position := global_position - up * 1.0
 
-        if not planet.is_chunk_ready_at(ground_position):
-            # Не даём провалиться сквозь ещё не загруженную поверхность.
-            # Горизонтальное движение при этом сохраняется.
-            vertical_speed = 0.0
+		if not planet.is_chunk_ready_at(ground_position):
+			vertical_speed = 0.0
 
-    velocity = horizontal_velocity + up * vertical_speed
-
+	velocity = horizontal_velocity + up * vertical_speed
 
 
-    move_and_slide()
 
-    planet.update_streaming(global_position)
+	move_and_slide()
 
-    vertical_speed = velocity.dot(up)
+	planet.update_streaming(global_position)
 
-    # Добыча.
-    if mining_requested:
-        mining_requested = false
-        mine_block()
+	vertical_speed = velocity.dot(up)
+
+	# Добыча.
+	if mining_requested:
+		mining_requested = false
+		mine_block()
 
 
 func update_orientation(up: Vector3) -> void:
-    heading = heading.slide(up).normalized()
+	heading = heading.slide(up).normalized()
 
-    if heading.length_squared() < 0.001:
-        heading = Vector3.FORWARD.slide(up).normalized()
+	if heading.length_squared() < 0.001:
+		heading = Vector3.FORWARD.slide(up).normalized()
 
-    var right := heading.cross(up).normalized()
-    var backward := -heading
+	var right := heading.cross(up).normalized()
+	var backward := -heading
 
-    global_basis = Basis(
-        right,
-        up,
-        backward
-    ).orthonormalized()
+	global_basis = Basis(
+		right,
+		up,
+		backward
+	).orthonormalized()
 
 
 func mine_block() -> void:
-    var origin := camera.global_position
-    var direction := -camera.global_basis.z
+	var origin := camera.global_position
+	var direction := -camera.global_basis.z
 
-    var success := planet.mine(
-        origin,
-        direction,
-        10.0
-    )
+	var success := planet.mine(
+		origin,
+		direction,
+		10.0
+	)
 
-    if success:
-        print("Block mined!")
-    else:
-        print("No block in reach!")
+	if success:
+		print("Block mined!")
+	else:
+		print("No block in reach!")
