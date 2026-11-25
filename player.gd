@@ -164,6 +164,25 @@ func _physics_process(delta: float) -> void:
 	var camera_forward := -camera.global_basis.z
 	var camera_right := camera.global_basis.x
 
+	# Направление взгляда камеры в мировых координатах.
+	var look_direction := -camera.global_basis.z
+
+	# Формируем битовую маску нажатых кнопок.
+	var buttons := NetworkProtocol.Buttons.NONE
+
+	if Input.is_action_pressed("jump"):
+		buttons |= NetworkProtocol.Buttons.JUMP
+
+	# if Input.is_action_pressed("sprint"):
+	# 	buttons |= NetworkProtocol.Buttons.SPRINT
+
+	# Передаём управление серверу.
+	Network.player_network.send_input(
+		input,
+		look_direction,
+		buttons
+	)
+
 	camera_forward = camera_forward.slide(up).normalized()
 	camera_right = camera_right.slide(up).normalized()
 

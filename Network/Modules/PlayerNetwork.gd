@@ -84,6 +84,16 @@ func submit_input(
 		"buttons": buttons
 	}
 
+	# Не засоряем консоль каждым пакетом.
+	if sequence % 60 == 0:
+		print(
+			"INPUT RECEIVED | ID: ", sender_id,
+			" | SEQUENCE: ", sequence,
+			" | MOVE: ", move_input,
+			" | LOOK: ", look_direction,
+			" | BUTTONS: ", buttons
+		)
+
 
 func broadcast_player_list() -> void:
 	if not multiplayer.is_server():
