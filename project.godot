@@ -11,9 +11,13 @@ config_version=5
 [application]
 
 config/name="Nodes"
-run/main_scene="uid://clmcdocutm02t"
+run/main_scene="uid://c8a66f0y13ta6"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
+
+[autoload]
+
+Network="*uid://dv0sonli08y20"
 
 [display]
 
