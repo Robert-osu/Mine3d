@@ -23,14 +23,37 @@ extends CharacterBody3D
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
 # @onready var coord_label: Label = $Player/DebugPanel/VBoxContainer/CoordLabel
+@onready var collision_shape: CollisionShape3D = $CollisionShape3D
+
+@onready var visual: Node3D = $Visual
+
+var visual_rest_position := Vector3.ZERO
+var camera_rest_position := Vector3.ZERO
+
+const VISUAL_CORRECTION_SPEED := 12.0
 
 var vertical_speed := 0.0
 var heading := Vector3.FORWARD
 var mining_requested := false
 var spawn_ready := false
+var is_remote: bool = false
 
 
 func _ready() -> void:
+	if is_remote:
+		# Удалённому игроку не нужна камера.
+		camera_pivot.visible = false
+		camera.current = false
+
+		# Удалённые персонажи не участвуют
+		# в локальной физике.
+		collision_shape.disabled = true
+
+		set_physics_process(false)
+		set_process_unhandled_input(false)
+
+		return
+
 	if planet == null:
 		push_error("Assign Planet in Player Inspector!")
 		return
@@ -58,6 +81,9 @@ func _ready() -> void:
 
 	spawn_ready = true
 
+	Network.register_local_player(self)
+	
+
 	heading = Vector3.FORWARD.slide(spawn_direction).normalized()
 
 	up_direction = spawn_direction
@@ -67,6 +93,9 @@ func _ready() -> void:
 	camera_pivot.position = Vector3(0, camera_height, 0)
 	camera_pivot.rotation = Vector3.ZERO
 
+	visual_rest_position = visual.position
+	camera_rest_position = camera_pivot.position
+
 	camera.position = Vector3.ZERO
 	camera.rotation = Vector3.ZERO
 	camera.make_current()
@@ -75,6 +104,13 @@ func _ready() -> void:
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
+
+func apply_reconciliation_correction(old_position: Vector3) -> void:
+	var world_offset := old_position - global_position
+	var local_offset := global_basis.inverse() * world_offset
+
+	visual.position += local_offset
+	camera_pivot.position += local_offset
 
 func create_flashlight() -> void:
 	var flashlight := SpotLight3D.new()
@@ -129,22 +165,28 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.button_index == MOUSE_BUTTON_RIGHT:
 				if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
 					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	
 
 func _physics_process(delta: float) -> void:
+	if is_remote:
+		return
+
+	var weight := 1.0 - exp(-VISUAL_CORRECTION_SPEED * delta)
+
+	visual.position = visual.position.lerp(
+		visual_rest_position,
+		weight
+	)
+
+	camera_pivot.position = camera_pivot.position.lerp(
+		camera_rest_position,
+		weight
+	)
+
 	if not spawn_ready:
 		return
 
 	if planet == null:
 		return
-
-	# var local_pos := planet.to_local(global_position)
-
-	# coord_label.text = "X: %.2f\nY: %.2f\nZ: %.2f" % [
-	# 	local_pos.x,
-	# 	local_pos.y,
-	# 	local_pos.z
-	# ]
 
 	var center := planet.to_global(planet.get_planet_center())
 	var up := (global_position - center).normalized()
@@ -153,93 +195,39 @@ func _physics_process(delta: float) -> void:
 
 	update_orientation(up)
 
-	# Управление относительно направления взгляда.
+	# Получаем ввод.
 	var input := Input.get_vector(
 		"move_left",
 		"move_right",
 		"move_forward",
-        "move_backward"
+		"move_backward"
 	)
 
-	var camera_forward := -camera.global_basis.z
-	var camera_right := camera.global_basis.x
-
-	# Направление взгляда камеры в мировых координатах.
+	# Направление камеры.
 	var look_direction := -camera.global_basis.z
 
-	# Формируем битовую маску нажатых кнопок.
+	# Кнопки.
 	var buttons := NetworkProtocol.Buttons.NONE
 
 	if Input.is_action_pressed("jump"):
 		buttons |= NetworkProtocol.Buttons.JUMP
 
-	# if Input.is_action_pressed("sprint"):
-	# 	buttons |= NetworkProtocol.Buttons.SPRINT
-
-	# Передаём управление серверу.
-	Network.player_network.send_input(
+	# Серверная симуляция + клиентское предсказание.
+	Network.process_local_player(
+		self,
+		delta,
 		input,
 		look_direction,
 		buttons
 	)
 
-	camera_forward = camera_forward.slide(up).normalized()
-	camera_right = camera_right.slide(up).normalized()
-
-	var move_direction := (
-		camera_right * input.x
-		+ camera_forward * -input.y
-	).normalized()
-
-	
-
-	var horizontal_velocity := velocity.slide(up)
-
-	if move_direction.length_squared() > 0.001:
-		horizontal_velocity = horizontal_velocity.move_toward(
-			move_direction * move_speed,
-			acceleration * delta
-		)
-	else:
-		horizontal_velocity = horizontal_velocity.move_toward(
-			Vector3.ZERO,
-			acceleration * delta
-		)
-
-	# Гравитация.
-	if Input.is_action_just_pressed("jump") and is_on_floor():
-		vertical_speed = jump_force
-	elif not is_on_floor():
-		vertical_speed -= gravity * delta
-
-	velocity = horizontal_velocity + up * vertical_speed
-
-	# Проверяем готовность поверхности только рядом с землёй.
-	# В воздухе незагруженные чанки не должны останавливать игрока.
-	var altitude := global_position.distance_to(center) - planet.RADIUS
-
-	if altitude < 3.0 and vertical_speed < 0.0:
-		# Проверяем чанк непосредственно под персонажем.
-		var ground_position := global_position - up * 1.0
-
-		if not planet.is_chunk_ready_at(ground_position):
-			vertical_speed = 0.0
-
-	velocity = horizontal_velocity + up * vertical_speed
-
-
-
-	move_and_slide()
-
+	# Обновляем чанки.
 	planet.update_streaming(global_position)
-
-	vertical_speed = velocity.dot(up)
 
 	# Добыча.
 	if mining_requested:
 		mining_requested = false
 		mine_block()
-
 
 func update_orientation(up: Vector3) -> void:
 	heading = heading.slide(up).normalized()

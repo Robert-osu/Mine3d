@@ -49,7 +49,7 @@ func hello(version: int, requested_name: String) -> void:
 
 	welcome.rpc_id(sender_id, sender_id)
 
-	Network.player_network.broadcast_player_list()
+	Network._broadcast_player_list()
 
 
 # Сервер подтверждает подключение.

@@ -5,8 +5,8 @@ class_name Planet
 @export_range(1, 1000) var planet_scale: int = 5
 
 @export_group("Chunks")
-@export_range(1, 8) var load_radius: int = 1
-@export_range(0, 16) var air_chunks_above: int = 1
+@export_range(1, 8) var load_radius: int = 3
+@export_range(0, 16) var air_chunks_above: int = 4
 @export_range(1, 6) var unload_radius: int = 3
 @export_range(96, 2048) var blocks_per_frame: int = 512
 
