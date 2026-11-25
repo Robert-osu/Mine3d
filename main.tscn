@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://bjk4vur5hjyq8" path="res://planet.gd" id="1_ig7tw"]
 [ext_resource type="Script" uid="uid://cnqi4mrejmd3k" path="res://player.gd" id="2_0xm2m"]
+[ext_resource type="Script" uid="uid://buag3ht3q183o" path="res://debug_panel.gd" id="3_h2yge"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_38sbo"]
 radius = 0.35
@@ -21,8 +22,9 @@ ambient_light_energy = 0.8
 [node name="Planet" type="StaticBody3D" parent="." unique_id=540945019]
 script = ExtResource("1_ig7tw")
 planet_scale = 1000
-load_radius = 8
+load_radius = 3
 air_chunks_above = 4
+sections_per_frame = 8
 
 [node name="Player" type="CharacterBody3D" parent="." unique_id=1269606711 node_paths=PackedStringArray("planet")]
 wall_min_slide_angle = 0.5235988
@@ -44,6 +46,38 @@ mesh = SubResource("CapsuleMesh_5vmv2")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 5)
 fov = 70.0
 size = 44.0
+
+[node name="DebugPanel" type="Control" parent="Player" unique_id=27848428 node_paths=PackedStringArray("planet")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("3_h2yge")
+planet = NodePath("../../Planet")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Player/DebugPanel" unique_id=162933629]
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_top = -52.0
+offset_right = 40.0
+offset_bottom = 52.0
+grow_vertical = 2
+
+[node name="CoordLabel" type="Label" parent="Player/DebugPanel/VBoxContainer" unique_id=72012665]
+layout_mode = 2
+
+[node name="PerformanceLabel" type="Label" parent="Player/DebugPanel/VBoxContainer" unique_id=1460092738]
+layout_mode = 2
+
+[node name="ChunksLabel" type="Label" parent="Player/DebugPanel/VBoxContainer" unique_id=1148897869]
+layout_mode = 2
+
+[node name="SectionsLabel" type="Label" parent="Player/DebugPanel/VBoxContainer" unique_id=2014406102]
+layout_mode = 2
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1901167807]
 environment = SubResource("Environment_5vmv2")
