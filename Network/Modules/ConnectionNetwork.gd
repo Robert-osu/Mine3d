@@ -42,6 +42,9 @@ func hello(version: int, requested_name: String) -> void:
 		"name": clean_name
 	}
 
+	# Создаём серверную модель персонажа.
+	Network.create_server_player(sender_id)
+
 	print("PLAYER AUTHORIZED: ", clean_name, " ID: ", sender_id)
 
 	welcome.rpc_id(sender_id, sender_id)

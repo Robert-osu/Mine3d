@@ -228,6 +228,8 @@ func _clear_temporary_section_faces(
 
 
 func _ready() -> void:
+    add_to_group("planet")
+
     SIZE = 32 * planet_scale
     RADIUS = 14.0 * planet_scale
 

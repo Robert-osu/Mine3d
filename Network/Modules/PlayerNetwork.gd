@@ -4,9 +4,6 @@ class_name PlayerNetwork
 
 var visible_players: Dictionary = {}
 
-# Последний принятый ввод каждого игрока.
-var latest_inputs: Dictionary = {}
-
 # Последний обработанный порядковый номер.
 var last_input_sequence: Dictionary = {}
 
@@ -78,11 +75,17 @@ func submit_input(
 	# Сохраняем последний ввод игрока.
 	last_input_sequence[sender_id] = sequence
 
-	latest_inputs[sender_id] = {
-		"move_input": move_input.limit_length(1.0),
-		"look_direction": look_direction.normalized(),
-		"buttons": buttons
-	}
+	if not Network.server_players.has(sender_id):
+		return
+
+	var server_player: ServerPlayer = Network.server_players[sender_id]
+
+	server_player.set_input(
+		sequence,
+		move_input,
+		look_direction,
+		buttons
+	)
 
 	# Не засоряем консоль каждым пакетом.
 	if sequence % 60 == 0:
