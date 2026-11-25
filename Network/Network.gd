@@ -67,12 +67,12 @@ func _on_peer_connected(id: int) -> void:
 func _on_peer_disconnected(id: int) -> void:
 	print("PLAYER DISCONNECTED: ", id)
 
-	if connected_players.has(id):
-		connected_players.erase(id)
+	connected_players.erase(id)
 
-		print("PLAYER REMOVED FROM SERVER REGISTRY: ", id)
+	player_network.latest_inputs.erase(id)
+	player_network.last_input_sequence.erase(id)
 
-		player_network.broadcast_player_list()
+	player_network.broadcast_player_list()
 
 
 # --------------------------------------------------

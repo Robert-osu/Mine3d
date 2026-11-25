@@ -15,7 +15,7 @@ func on_client_connected() -> void:
 
 
 # Клиент отправляет запрос серверу.
-@rpc("any_peer", "call_remote", "reliable")
+@rpc("any_peer", "call_remote", "reliable", 0)
 func hello(version: int, requested_name: String) -> void:
 	if not multiplayer.is_server():
 		return
@@ -50,7 +50,7 @@ func hello(version: int, requested_name: String) -> void:
 
 
 # Сервер подтверждает подключение.
-@rpc("authority", "call_remote", "reliable")
+@rpc("authority", "call_remote", "reliable", 0)
 func welcome(server_assigned_id: int) -> void:
 	if connected:
 		return
@@ -66,9 +66,10 @@ func welcome(server_assigned_id: int) -> void:
 
 
 # Сервер отклоняет подключение.
-@rpc("authority", "call_remote", "reliable")
+@rpc("authority", "call_remote", "reliable", 0)
 func reject(reason: String) -> void:
 	print("JOIN REJECTED: ", reason)
 
 	connected = false
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+
