@@ -28,7 +28,8 @@ static func is_capsule_blocked(
     planet: Planet,
     world_position: Vector3,
     world_up: Vector3,
-    diagnostic_phase: StringName = &"collision_other"
+    diagnostic_phase: StringName = &"collision_other",
+    solid_cache: Variant = null
 ) -> bool:
 
     var started_usec: int = Time.get_ticks_usec()
@@ -87,7 +88,7 @@ static func is_capsule_blocked(
             for z in range(min_cell.z, max_cell.z + 1):
                 tested_cells += 1
 
-                if not planet.is_solid(x, y, z):
+                if not _is_solid_cached(planet, x, y, z, solid_cache):
                     continue
 
                 var block_min := Vector3(x, y, z) * planet.BLOCK_SIZE
@@ -131,6 +132,10 @@ static func move_capsule(
     )
 
     var current_position := world_position
+    # Один вызов перемещения многократно проверяет соседние ячейки.
+    # Кэш живёт только в пределах этого вызова, поэтому добыча между
+    # отдельными перемещениями не может оставить в нём устаревшие данные.
+    var solid_cache: Dictionary = {}
 
     # Если персонаж уже находится внутри блока,
     # сначала пытаемся устранить проникновение.
@@ -142,7 +147,8 @@ static func move_capsule(
         planet,
         current_position,
         initial_up,
-        &"move_initial"
+        &"move_initial",
+        solid_cache
     )
 
     if initial_collision.collided:
@@ -191,7 +197,8 @@ static func move_capsule(
                 planet,
                 candidate,
                 candidate_up,
-                &"move_candidate"
+                &"move_candidate",
+                solid_cache
             )
 
             # Препятствий нет — принимаем перемещение.
@@ -224,7 +231,8 @@ static func move_capsule(
                     planet,
                     test_position,
                     test_up,
-                    &"move_binary"
+                    &"move_binary",
+                    solid_cache
                 )
 
                 if test_collision:
@@ -251,6 +259,29 @@ static func move_capsule(
                 break
 
     return current_position
+
+# Повторные проверки одной ячейки внутри одного move_capsule()
+# используют результат первого обращения к планете.
+# При null сохраняется обычное поведение без кэширования.
+static func _is_solid_cached(
+    planet: Planet,
+    x: int,
+    y: int,
+    z: int,
+    solid_cache: Variant
+) -> bool:
+
+    if solid_cache == null:
+        return planet.is_solid(x, y, z)
+
+    var cell := Vector3i(x, y, z)
+    if solid_cache.has(cell):
+        return bool(solid_cache[cell])
+
+    var solid: bool = planet.is_solid(x, y, z)
+    solid_cache[cell] = solid
+    return solid
+
 
 # Проверяет расстояние между отрезком и AABB.
 static func _segment_intersects_box(
@@ -376,7 +407,8 @@ static func get_capsule_collision(
     planet: Planet,
     world_position: Vector3,
     world_up: Vector3,
-    diagnostic_phase: StringName = &"collision_other"
+    diagnostic_phase: StringName = &"collision_other",
+    solid_cache: Variant = null
 ) -> CollisionResult:
 
     var started_usec: int = Time.get_ticks_usec()
@@ -430,7 +462,7 @@ static func get_capsule_collision(
             for z in range(min_cell.z, max_cell.z + 1):
                 tested_cells += 1
 
-                if not planet.is_solid(x, y, z):
+                if not _is_solid_cached(planet, x, y, z, solid_cache):
                     continue
 
                 var box_min := Vector3(x, y, z) * planet.BLOCK_SIZE
