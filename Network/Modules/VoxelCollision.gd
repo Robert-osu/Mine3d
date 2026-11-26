@@ -126,7 +126,7 @@ static func move_capsule(
     planet: Planet,
     world_position: Vector3,
     displacement: Vector3,
-    cache: Variant = null
+    solid_cache: Variant = null
 ) -> Vector3:
 
     if planet == null or displacement.length_squared() < 0.000001:
@@ -139,7 +139,7 @@ static func move_capsule(
     var current_position := world_position
     # Используем кэш вызывающей симуляции или создаём локальный,
     # если move_capsule вызван самостоятельно.
-    var cache: Variant = cache
+    var cache: Variant = solid_cache
     if cache == null:
         cache = {}
 
