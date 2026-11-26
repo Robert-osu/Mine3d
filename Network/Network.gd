@@ -31,6 +31,8 @@ var player_name: String = "Player"
 
 var connected_players: Dictionary = {}
 var server_players: Dictionary = {}
+var spawn_slots: Dictionary = {}
+var local_spawn_slot: int = 0
 
 # Локальный персонаж клиента.
 var local_player: CharacterBody3D
@@ -149,6 +151,7 @@ func _on_peer_disconnected(id: int) -> void:
 
 	connected_players.erase(id)
 	server_players.erase(id)
+	spawn_slots.erase(id)
 
 	if is_instance_valid(world_network):
 		world_network.cancel_pending_player(id)
@@ -166,13 +169,13 @@ const SPAWN_GOLDEN_ANGLE: float = 2.399963229728653
 
 func get_player_spawn_position(
 	current_planet: Planet,
-	player_id: int
+	spawn_slot: int
 ) -> Vector3:
 
 	if current_planet == null:
 		return Vector3.ZERO
 
-	var slot := maxi(player_id - 1, 0)
+	var slot := maxi(spawn_slot, 0)
 	var distance := SPAWN_SPACING * sqrt(float(slot))
 	var angle := float(slot) * SPAWN_GOLDEN_ANGLE
 
@@ -201,9 +204,17 @@ func create_server_player(id: int) -> void:
 		push_error("Planet not found on server!")
 		return
 
+	# Слот выделяется сервером, поэтому случайный ENet ID
+	# не влияет на расстояние от общей точки появления.
+	var spawn_slot := 1
+	while spawn_slots.values().has(spawn_slot):
+		spawn_slot += 1
+
+	spawn_slots[id] = spawn_slot
+
 	var spawn_position := get_player_spawn_position(
 		current_planet,
-		id
+		spawn_slot
 	)
 
 	var server_player := ServerPlayer.new(id, spawn_position)
