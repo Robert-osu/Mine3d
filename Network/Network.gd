@@ -252,10 +252,11 @@ func start_server() -> void:
 
 	print("SERVER STARTED ON PORT ", settings.port)
 
-func _on_peer_connected(id: int) -> void:
-	func _on_peer_disconnected(id: int) -> void:
-	print("PLAYER DISCONNECTED: ", id)
+func _on_peer_connected(_id: int) -> void:
+	pass
 
+
+func _on_peer_disconnected(id: int) -> void:
 	connected_players.erase(id)
 	server_players.erase(id)
 	spawn_slots.erase(id)
@@ -265,7 +266,6 @@ func _on_peer_connected(id: int) -> void:
 
 	if multiplayer.is_server():
 		_broadcast_player_list()
-
 
 # Все участники используют одну детерминированную раскладку спавнов.
 # Золотая спираль размещает игроков компактной группой вокруг северного полюса.
