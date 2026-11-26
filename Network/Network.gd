@@ -1148,16 +1148,13 @@ func _simulate_movement(
 			settings.acceleration * delta
 		)
 
-	# Проверяем контакт с поверхностью.
-	var ground_collision := VoxelCollision.get_capsule_collision(
+	# Проверяем опору по всем контактам капсулы.
+	# Самый глубокий контакт может оказаться боковой гранью блока,
+	# даже если другая часть капсулы уже опирается на поверхность.
+	var grounded := VoxelCollision.has_capsule_support(
 		current_planet,
 		current_position - up * 0.08,
 		up
-	)
-
-	var grounded := (
-		ground_collision.collided
-		and ground_collision.normal.dot(up) > 0.5
 	)
 
 	# Проверяем нажатие прыжка.
@@ -1222,8 +1219,20 @@ func _simulate_movement(
 		if velocity_into_wall < 0.0:
 			new_velocity = new_velocity.slide(collision.normal)
 
-	# Определяем новое направление относительно поверхности.
+	# Повторно проверяем опору уже в конечной позиции.
+	# Это фиксирует приземление в текущем тике и не даёт гравитации
+	# каждый следующий тик вдавливать капсулу в край блока.
 	var new_up := (new_position - center).normalized()
+	grounded = VoxelCollision.has_capsule_support(
+		current_planet,
+		new_position - new_up * 0.08,
+		new_up
+	)
+
+	if grounded:
+		var velocity_into_ground := new_velocity.dot(new_up)
+		if velocity_into_ground < 0.0:
+			new_velocity -= new_up * velocity_into_ground
 
 	var new_heading := forward.slide(new_up).normalized()
 
