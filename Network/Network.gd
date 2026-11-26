@@ -235,8 +235,8 @@ func _simulate_server_player(
 
 	# Выполняем отложенную добычу после обработки движения.
 	if server_player.mine_requested:
-		server_player.mine_requested = false
-		_server_mine_block(server_player, current_planet)
+		if _server_mine_block(server_player, current_planet):
+			server_player.mine_requested = false
 
 # ============================================================
 # CLIENT CONNECTION
@@ -959,7 +959,7 @@ func receive_block_destroyed(cell: Vector3i) -> void:
 func _server_mine_block(
 	server_player: ServerPlayer,
 	current_planet: Planet
-) -> void:
+) -> bool:
 
 	var center := current_planet.to_global(
 		current_planet.get_planet_center()
@@ -972,10 +972,10 @@ func _server_mine_block(
 	# Запрещаем добычу при любом движении,
 	# включая прыжок, падение и скольжение.
 	if server_player.move_input.length_squared() > 0.05:
-		return
+		return false
 
 	if server_player.velocity.length_squared() > 0.05:
-		return
+		return false
 
 	var ray_origin := server_player.position + up * 0.8
 	var ray_direction := server_player.look_direction.normalized()
@@ -987,10 +987,10 @@ func _server_mine_block(
 	)
 
 	if cell == Vector3i(-1, -1, -1):
-		return
+		return true
 
 	if not current_planet.destroy_block(cell):
-		return
+		return true
 
 	# Клиенты, которые ещё получают снимок мира, получат это изменение
 	# отдельным событием после завершения передачи снимка.
@@ -998,3 +998,4 @@ func _server_mine_block(
 		world_network.queue_mined_cell(cell)
 
 	receive_block_destroyed.rpc(cell)
+	return true
