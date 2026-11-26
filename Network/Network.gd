@@ -377,6 +377,7 @@ func _cleanup_client_connection() -> void:
 	remote_players.clear()
 	remote_snapshots.clear()
 	connected_players.clear()
+	local_spawn_slot = 0
 
 	if is_instance_valid(connection_network):
 		connection_network.connected = false
