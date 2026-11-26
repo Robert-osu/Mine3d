@@ -109,7 +109,4 @@ func broadcast_player_list() -> void:
 func sync_player_list(players: Dictionary) -> void:
 	visible_players = players.duplicate(true)
 
-		for id in visible_players:
-		var player_data: Dictionary = visible_players[id]
-
 			print("====================================")
