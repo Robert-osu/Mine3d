@@ -775,7 +775,8 @@ func _broadcast_player_states() -> void:
 			"velocity": server_player.velocity,
 			"heading": server_player.heading,
 			"acknowledged_input": server_player.last_input_sequence,
-			"previous_buttons": server_player.previous_buttons
+			"previous_buttons": server_player.previous_buttons,
+			"grounded": server_player.grounded
 		}
 
 	# Один общий снимок для всех клиентов.
@@ -812,7 +813,8 @@ func receive_world_snapshot(
 				state["velocity"],
 				state["heading"],
 				state["acknowledged_input"],
-				state["previous_buttons"]
+				state["previous_buttons"],
+				state["grounded"]
 			)
 			continue
 
@@ -833,7 +835,8 @@ func _reconcile_player(
 	server_velocity: Vector3,
 	server_heading: Vector3,
 	acknowledged_input: int,
-	acknowledged_buttons: int
+	acknowledged_buttons: int,
+	server_grounded: bool
 ) -> void:
 
 	if local_player == null:
@@ -859,6 +862,8 @@ func _reconcile_player(
 	# Восстанавливаем авторитетное состояние сервера.
 	var corrected_position := server_position
 	var corrected_velocity := server_velocity
+	var corrected_heading := server_heading
+	var corrected_grounded := server_grounded
 
 	var previous_buttons := acknowledged_buttons
 
@@ -877,21 +882,36 @@ func _reconcile_player(
 
 		corrected_position = result["position"]
 		corrected_velocity = result["velocity"]
+		corrected_heading = result["heading"]
+		corrected_grounded = result["grounded"]
 
 		previous_buttons = int(frame["buttons"])
 
 	local_previous_buttons = previous_buttons
+	local_velocity = corrected_velocity
+	local_grounded = corrected_grounded
 
-	# Устанавливаем восстановленное положение.
+	# Восстанавливаем положение и ориентацию из одного состояния.
 	local_player.global_position = corrected_position
+	local_player.velocity = corrected_velocity
 
+	var center := current_planet.to_global(
+		current_planet.get_planet_center()
+	)
+	var corrected_up := (corrected_position - center).normalized()
+
+	local_player.set(
+		"heading",
+		corrected_heading.slide(corrected_up).normalized()
+	)
+	local_player.up_direction = corrected_up
+	local_player.call("update_orientation", corrected_up)
+
+	# Смещаем только визуальную часть, сохраняя плавную коррекцию.
 	local_player.call(
 		"apply_reconciliation_correction",
 		old_position
 	)
-
-	local_velocity = corrected_velocity
-	local_player.velocity = corrected_velocity
 
 	# Разница нужна для диагностики.
 	var error_distance := old_position.distance_to(corrected_position)
