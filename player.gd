@@ -21,7 +21,7 @@ const VISUAL_CORRECTION_SPEED := 12.0
 
 var vertical_speed := 0.0
 var heading := Vector3.FORWARD
-var mining_requested := false
+var pending_mining_requests: int = 0
 var spawn_ready := false
 var is_remote: bool = false
 
@@ -151,7 +151,10 @@ func _unhandled_input(event: InputEvent) -> void:
         if event.pressed:
             if event.button_index == MOUSE_BUTTON_LEFT:
                 if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-                    mining_requested = true
+                    pending_mining_requests = mini(
+                        pending_mining_requests + 1,
+                        8
+                    )
 
             if event.button_index == MOUSE_BUTTON_RIGHT:
                 if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
@@ -203,38 +206,31 @@ func _physics_process(delta: float) -> void:
     if Input.is_action_pressed("jump"):
         buttons |= NetworkProtocol.Buttons.JUMP
 
+    # Забираем накопленные удары и прикрепляем их к текущему input.
+    var mine_requests_this_tick := pending_mining_requests
+    pending_mining_requests = 0
+
+    var is_moving := (
+        input.length_squared() > 0.01
+        or velocity.length_squared() > 0.01
+    )
+
+    if is_moving:
+        mine_requests_this_tick = 0
+
     # Серверная симуляция + клиентское предсказание.
     Network.process_local_player(
         self,
         delta,
         input,
         look_direction,
-        buttons
+        buttons,
+        mine_requests_this_tick
     )
 
     # Обновляем чанки.
     planet.update_streaming(global_position)
 
-    # Добыча разрешена только в состоянии покоя.
-    if mining_requested:
-        mining_requested = false
-
-        var is_moving := (
-            input.length_squared() > 0.01
-            or velocity.length_squared() > 0.01
-        )
-
-        if is_moving:
-            return
-
-        print(
-            "CLIENT MINE | POSITION: ",
-            global_position,
-            " | LOOK: ",
-            -camera.global_basis.z
-        )
-
-        mine_block()
 
 func update_orientation(up: Vector3) -> void:
     heading = heading.slide(up).normalized()
@@ -251,6 +247,4 @@ func update_orientation(up: Vector3) -> void:
         backward
     ).orthonormalized()
 
-func mine_block() -> void:
-    Network.request_mine.rpc_id(1)
 

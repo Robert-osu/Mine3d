@@ -210,9 +210,10 @@ func _simulate_server_player(
 ) -> void:
 
 	# За один физический тик применяем не более одного нового input.
-	# Если новых пакетов нет, продолжаем симуляцию с последним управлением.
+	# События добычи обрабатываются вместе с тем input, к которому относятся.
+	var input_frame: Dictionary = {}
 	if not server_player.input_queue.is_empty():
-		server_player.take_next_input()
+		input_frame = server_player.take_next_input()
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
@@ -233,10 +234,10 @@ func _simulate_server_player(
 
 	server_player.finish_tick()
 
-	# Выполняем отложенную добычу после обработки движения.
-	if server_player.mine_requested:
-		if _server_mine_block(server_player, current_planet):
-			server_player.mine_requested = false
+	# Добываем после применения состояния из input, содержащего удар.
+	var mine_requests: int = input_frame.get("mine_requests", 0)
+	for _request_index in range(mine_requests):
+		_server_mine_block(server_player, current_planet)
 
 # ============================================================
 # CLIENT CONNECTION
@@ -321,7 +322,8 @@ func process_local_player(
 	delta: float,
 	move_input: Vector2,
 	look_direction: Vector3,
-	buttons: int
+	buttons: int,
+	mine_requests: int = 0
 ) -> void:
 
 	if player == null:
@@ -350,6 +352,7 @@ func process_local_player(
 		"move_input": move_input,
 		"look_direction": look_direction,
 		"buttons": buttons,
+		"mine_requests": mine_requests,
 		"delta": delta
 	}
 
@@ -383,7 +386,8 @@ func process_local_player(
 		move_input,
 		look_direction,
 		buttons,
-		delta
+		delta,
+		mine_requests
 	)
 
 	# Обновляем загрузку чанков.
@@ -400,7 +404,8 @@ func submit_input(
 	move_input: Vector2,
 	look_direction: Vector3,
 	buttons: int,
-	_client_delta: float
+	_client_delta: float,
+	mine_requests: int
 ) -> void:
 
 	if not multiplayer.is_server():
@@ -440,6 +445,10 @@ func submit_input(
 	if not _is_finite_vector3(look_direction):
 		return
 
+	# Защита от некорректного количества событий добычи в одном input.
+	if mine_requests < 0 or mine_requests > 8:
+		return
+
 	# Защита от некорректной маски кнопок.
 	var allowed_buttons := NetworkProtocol.Buttons.JUMP
 
@@ -450,7 +459,8 @@ func submit_input(
 		sequence,
 		move_input,
 		look_direction,
-		buttons
+		buttons,
+		mine_requests
 	)
 
 
@@ -924,24 +934,6 @@ func _update_remote_players() -> void:
 		remote_player.global_position = position
 		remote_player.set("heading", heading)
 		remote_player.call("update_orientation", up)
-
-@rpc("any_peer", "call_remote", "reliable")
-func request_mine() -> void:
-
-	if not multiplayer.is_server():
-		return
-
-	var sender_id := multiplayer.get_remote_sender_id()
-
-	if not connected_players.has(sender_id):
-		return
-
-	if not server_players.has(sender_id):
-		return
-
-	var server_player: ServerPlayer = server_players[sender_id]
-
-	server_player.mine_requested = true
 
 @rpc("authority", "call_remote", "reliable")
 func receive_block_destroyed(cell: Vector3i) -> void:
