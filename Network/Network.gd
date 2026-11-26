@@ -158,19 +158,16 @@ func _flush_mining_diagnostics() -> void:
 		if diag_server_mine_requests > 0:
 			server_mine_avg_ms = float(diag_server_mine_usec) / float(diag_server_mine_requests) / 1000.0
 
-		print(
+				print(
 			"DIAG SERVER | ticks: ", diag_server_ticks,
-			" | tick avg/max ms: ", "%.3f" % server_tick_avg_ms, "/", "%.3f" % (float(diag_server_tick_max_usec) / 1000.0),
-			" | movement calls/avg/max ms: ", diag_server_movement_calls, "/", "%.3f" % server_movement_avg_ms, "/", "%.3f" % (float(diag_server_movement_max_usec) / 1000.0),
-			" | mine req/success: ", diag_server_mine_requests, "/", diag_server_mined,
-			" | mine avg/max ms: ", "%.3f" % server_mine_avg_ms, "/", "%.3f" % (float(diag_server_mine_max_usec) / 1000.0),
-			" | input accepted/rejected: ", diag_server_input_accepted, "/", diag_server_input_rejected,
-			" | input queue max: ", diag_server_input_queue_max,
-			" | collision calls/cells/max ms: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0), "/", "%.3f" % (float(planet_stats.get("collision_max_usec", 0)) / 1000.0),
-			" | collision phases: ", str(planet_stats.get("collision_phases", {})),
-			" | ray calls/steps max: ", planet_stats.get("ray_calls", 0), "/", planet_stats.get("ray_steps", 0), "/", planet_stats.get("ray_max_steps", 0),
-			" | destroy calls/max ms: ", planet_stats.get("destroy_calls", 0), "/", "%.3f" % (float(planet_stats.get("destroy_max_usec", 0)) / 1000.0),
-			" | section queue max: ", planet_stats.get("section_queue_max", 0)
+			" | movement avg/max ms: ", "%.3f" % server_movement_avg_ms, "/", "%.3f" % (float(diag_server_movement_max_usec) / 1000.0),
+			" | collision calls/cells: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0),
+			" | move phases: ", str({
+				"initial": planet_stats.get("collision_phases", {}).get(&"move_initial", [0, 0, 0]),
+				"candidate": planet_stats.get("collision_phases", {}).get(&"move_candidate", [0, 0, 0]),
+				"binary": planet_stats.get("collision_phases", {}).get(&"move_binary", [0, 0, 0])
+			}),
+			" | input accepted/rejected: ", diag_server_input_accepted, "/", diag_server_input_rejected
 		)
 	else:
 		var client_movement_avg_ms := 0.0
@@ -180,17 +177,16 @@ func _flush_mining_diagnostics() -> void:
 		if diag_client_mine_requests > 0:
 			client_ray_avg_ms = float(diag_client_ray_usec) / float(diag_client_mine_requests) / 1000.0
 
-		print(
+				print(
 			"DIAG CLIENT | frames: ", diag_client_frames,
 			" | movement avg/max ms: ", "%.3f" % client_movement_avg_ms, "/", "%.3f" % (float(diag_client_movement_max_usec) / 1000.0),
-			" | mine req: ", diag_client_mine_requests,
-			" | ray avg/max ms: ", "%.3f" % client_ray_avg_ms, "/", "%.3f" % (float(diag_client_ray_max_usec) / 1000.0),
-			" | pending input/mining max: ", diag_client_pending_inputs_max, "/", diag_client_pending_mining_max,
-			" | collision calls/cells/max ms: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0), "/", "%.3f" % (float(planet_stats.get("collision_max_usec", 0)) / 1000.0),
-			" | collision phases: ", str(planet_stats.get("collision_phases", {})),
-			" | ray calls/steps max: ", planet_stats.get("ray_calls", 0), "/", planet_stats.get("ray_steps", 0), "/", planet_stats.get("ray_max_steps", 0),
-			" | destroy calls/max ms: ", planet_stats.get("destroy_calls", 0), "/", "%.3f" % (float(planet_stats.get("destroy_max_usec", 0)) / 1000.0),
-			" | section queue max: ", planet_stats.get("section_queue_max", 0)
+			" | collision calls/cells: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0),
+			" | move phases: ", str({
+				"initial": planet_stats.get("collision_phases", {}).get(&"move_initial", [0, 0, 0]),
+				"candidate": planet_stats.get("collision_phases", {}).get(&"move_candidate", [0, 0, 0]),
+				"binary": planet_stats.get("collision_phases", {}).get(&"move_binary", [0, 0, 0])
+			}),
+			" | pending inputs max: ", diag_client_pending_inputs_max
 		)
 
 	diag_server_ticks = 0
@@ -257,10 +253,7 @@ func start_server() -> void:
 	print("SERVER STARTED ON PORT ", settings.port)
 
 func _on_peer_connected(id: int) -> void:
-	print("PLAYER CONNECTED: ", id, " — WAITING FOR HELLO")
-
-
-func _on_peer_disconnected(id: int) -> void:
+	func _on_peer_disconnected(id: int) -> void:
 	print("PLAYER DISCONNECTED: ", id)
 
 	connected_players.erase(id)
@@ -406,15 +399,7 @@ func create_server_player(id: int) -> void:
 
 	server_players[id] = server_player
 
-	print(
-		"SERVER PLAYER CREATED | ID: ",
-		id,
-		" | POSITION: ",
-		spawn_position
-	)
-
-
-func _server_physics_process(_delta: float) -> void:
+	func _server_physics_process(_delta: float) -> void:
 	var current_planet := _get_planet()
 
 	if current_planet == null:
@@ -1064,15 +1049,7 @@ func _reconcile_player(
 	var error_distance := old_position.distance_to(corrected_position)
 
 	if error_distance > settings.reconciliation_epsilon:
-		print(
-			"PLAYER RECONCILIATION | ERROR: ",
-			error_distance,
-			" | PENDING INPUTS: ",
-			pending_inputs.size()
-		)
-
-
-# ============================================================
+		# ============================================================
 # SHARED MOVEMENT SIMULATION
 # ============================================================
 
@@ -1252,9 +1229,7 @@ func sync_player_list(players: Dictionary) -> void:
 
 	connected_players = updated_players
 
-	print("========== PLAYERS ONLINE ==========")
-
-	for id in connected_players:
+		for id in connected_players:
 		var player_data: Dictionary = connected_players[id]
 
 		print(
@@ -1431,9 +1406,7 @@ func _ensure_remote_player(peer_id: int) -> void:
 
 	remote_players[peer_id] = remote_player
 
-	print("REMOTE PLAYER CREATED: ", peer_id)
-
-func _remove_remote_player(player_id: int) -> void:
+	func _remove_remote_player(player_id: int) -> void:
 	if remote_players.has(player_id):
 		var remote_player: Node = remote_players[player_id]
 
