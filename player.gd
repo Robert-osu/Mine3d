@@ -63,6 +63,9 @@ func _ready() -> void:
         Network.local_spawn_slot
     )
 
+    var planet_center := planet.to_global(planet.get_planet_center())
+    var spawn_direction := (spawn_position - planet_center).normalized()
+
     global_position = spawn_position
     planet.update_streaming(global_position)
 
