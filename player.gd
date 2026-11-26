@@ -65,9 +65,6 @@ func _ready() -> void:
 
 	var spawn_direction := Vector3.UP
 
-	# Радиус планеты + небольшой запас над поверхностью.
-	var spawn_distance := planet.RADIUS + 2.0
-
 	var direction := Vector3.UP
 
 	var surface_point := center + direction * (planet.RADIUS - 0.5)
@@ -244,18 +241,6 @@ func update_orientation(up: Vector3) -> void:
 		backward
 	).orthonormalized()
 
-
 func mine_block() -> void:
-	var origin := camera.global_position
-	var direction := -camera.global_basis.z
+	Network.request_mine.rpc_id(1)
 
-	var success := planet.mine(
-		origin,
-		direction,
-		10.0
-	)
-
-	if success:
-		print("Block mined!")
-	else:
-		print("No block in reach!")

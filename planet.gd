@@ -1187,12 +1187,14 @@ func get_cell(world_position: Vector3) -> Vector3i:
     )
 
 
-func mine(
+func get_mined_cell(
     ray_origin: Vector3,
     ray_direction: Vector3,
     max_distance: float = 100.0
-) -> bool:
+) -> Vector3i:
+
     var origin: Vector3 = to_local(ray_origin)
+
     var direction: Vector3 = (
         to_local(ray_origin + ray_direction.normalized()) - origin
     ).normalized()
@@ -1221,36 +1223,46 @@ func mine(
         INF if direction.z == 0.0 else (cell.z + (1 if step.z > 0 else 0) - origin.z) / direction.z
     )
 
-    var distance: float = 0.0
+    var distance := 0.0
+
     while distance <= max_distance:
         if is_solid(cell.x, cell.y, cell.z):
-            var chunk_key := index_to_chunk(cell)
-
-            if not chunks.has(chunk_key):
-                return false
-
-            var chunk_data: Dictionary = chunks[chunk_key]
-
-            if not bool(chunk_data.get("generated", false)):
-                return false
-
-            return destroy_block(cell)
+            return cell
 
         if t_max.x < t_max.y and t_max.x < t_max.z:
             distance = t_max.x
             t_max.x += t_delta.x
             cell.x += step.x
+
         elif t_max.y < t_max.z:
             distance = t_max.y
             t_max.y += t_delta.y
             cell.y += step.y
+
         else:
             distance = t_max.z
             t_max.z += t_delta.z
             cell.z += step.z
 
-    return false
+    return Vector3i(-1, -1, -1)
 
+
+func mine(
+    ray_origin: Vector3,
+    ray_direction: Vector3,
+    max_distance: float = 100.0
+) -> bool:
+
+    var cell := get_mined_cell(
+        ray_origin,
+        ray_direction,
+        max_distance
+    )
+
+    if cell == Vector3i(-1, -1, -1):
+        return false
+
+    return destroy_block(cell)
 
 
 func has_collision_at(world_position: Vector3) -> bool:

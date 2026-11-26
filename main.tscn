@@ -12,7 +12,6 @@ height = 1.4
 
 [sub_resource type="Environment" id="Environment_5vmv2"]
 background_mode = 1
-background_color = Color(0.03137255, 0.050980393, 0.09411765, 1)
 ambient_light_source = 2
 ambient_light_color = Color(0.20784314, 0.2509804, 0.32156864, 1)
 ambient_light_energy = 0.8
@@ -22,8 +21,6 @@ ambient_light_energy = 0.8
 [node name="Planet" type="StaticBody3D" parent="." unique_id=540945019 groups=["planet"]]
 script = ExtResource("1_ig7tw")
 planet_scale = 1000
-load_radius = 3
-air_chunks_above = 4
 sections_per_frame = 8
 
 [node name="Player" type="CharacterBody3D" parent="." unique_id=1269606711 node_paths=PackedStringArray("planet")]
@@ -32,6 +29,7 @@ floor_max_angle = 1.0471976
 floor_snap_length = 0.3
 script = ExtResource("2_0xm2m")
 planet = NodePath("../Planet")
+move_speed = 10.0
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=1531004803]
 shape = SubResource("CapsuleShape3D_38sbo")

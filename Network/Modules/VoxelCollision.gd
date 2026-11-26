@@ -99,6 +99,7 @@ static func is_capsule_blocked(
 
 # Перемещает капсулу на заданное расстояние.
 # Если встречает блок, останавливается перед ним.
+# Перемещает капсулу с обработкой столкновений и скольжения.
 static func move_capsule(
     planet: Planet,
     world_position: Vector3,
@@ -108,20 +109,44 @@ static func move_capsule(
     if planet == null or displacement.length_squared() < 0.000001:
         return world_position
 
-    var distance := displacement.length()
+    var planet_center := planet.to_global(
+        planet.get_planet_center()
+    )
 
-    # Размер шага ограничиваем половиной радиуса капсулы.
+    var current_position := world_position
+
+    # Если персонаж уже находится внутри блока,
+    # сначала пытаемся устранить проникновение.
+    var initial_up := (
+        current_position - planet_center
+    ).normalized()
+
+    var initial_collision := get_capsule_collision(
+        planet,
+        current_position,
+        initial_up
+    )
+
+    if initial_collision.collided:
+        current_position = resolve_capsule_collision(
+            planet,
+            current_position,
+            initial_up
+        )
+
+    # Ограничиваем размер одного шага.
     var max_step := COLLISION_RADIUS * 0.5
+    var distance := displacement.length()
     var steps := maxi(1, ceili(distance / max_step))
 
     var step_vector := displacement / float(steps)
-    var current_position := world_position
 
     for i in range(steps):
 
         var remaining := step_vector
 
-        # Несколько попыток позволяют скользить по нескольким поверхностям.
+        # Несколько столкновений за один шаг:
+        # например, при движении в угол.
         for j in range(3):
 
             if remaining.length_squared() < 0.000001:
@@ -129,38 +154,68 @@ static func move_capsule(
 
             var candidate := current_position + remaining
 
-            var planet_center := planet.to_global(
-                planet.get_planet_center()
-            )
-
-            var world_up := (
+            var candidate_up := (
                 candidate - planet_center
             ).normalized()
 
             var collision := get_capsule_collision(
                 planet,
                 candidate,
-                world_up
+                candidate_up
             )
 
-            # Свободное перемещение.
+            # Препятствий нет — принимаем перемещение.
             if not collision.collided:
                 current_position = candidate
                 break
 
-            # Устраняем проникновение в блок.
-            current_position = resolve_capsule_collision(
-                planet,
-                candidate,
-                world_up
-            )
+            # Ищем последнюю позицию, в которой
+            # капсула ещё не пересекается с блоками.
+            var low := 0.0
+            var high := 1.0
 
-            # Оставляем только составляющую движения,
-            # направленную вдоль поверхности препятствия.
-            remaining = remaining.slide(collision.normal)
+            for k in range(8):
+
+                var middle := (low + high) * 0.5
+
+                var test_position := (
+                    current_position + remaining * middle
+                )
+
+                var test_up := (
+                    test_position - planet_center
+                ).normalized()
+
+                var test_collision := get_capsule_collision(
+                    planet,
+                    test_position,
+                    test_up
+                )
+
+                if test_collision.collided:
+                    high = middle
+                else:
+                    low = middle
+
+            # Перемещаемся до найденной безопасной позиции.
+            current_position += remaining * low
+
+            # Оставшаяся часть движения.
+            remaining *= 1.0 - low
+
+            # Если нормаль некорректна, прекращаем этот шаг.
+            if collision.normal.length_squared() < 0.0001:
+                break
+
+            # Убираем только движение внутрь препятствия.
+            var into_surface := remaining.dot(collision.normal)
+
+            if into_surface < 0.0:
+                remaining -= collision.normal * into_surface
+            else:
+                break
 
     return current_position
-
 
 # Проверяет расстояние между отрезком и AABB.
 static func _segment_intersects_box(
