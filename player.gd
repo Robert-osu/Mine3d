@@ -73,8 +73,8 @@ func _ready() -> void:
     while not planet.has_collision_at(surface_point):
         if Time.get_ticks_msec() - spawn_wait_started >= SPAWN_TIMEOUT_MSEC:
             push_error(
-                "Player spawn timed out. ID: ",
-                player_id,
+                "Player spawn timed out. Spawn slot: ",
+                Network.local_spawn_slot,
                 " | Position: ",
                 spawn_position
             )
