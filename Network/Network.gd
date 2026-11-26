@@ -7,6 +7,7 @@ extends Node
 # ============================================================
 
 var connection_network: ConnectionNetwork
+var world_network: WorldNetwork
 
 
 # Параметры движения.
@@ -73,6 +74,10 @@ func _create_modules() -> void:
     connection_network.name = "ConnectionNetwork"
     add_child(connection_network)
 
+    world_network = WorldNetwork.new()
+    world_network.name = "WorldNetwork"
+    add_child(world_network)
+
 func _ready() -> void:
     _create_modules()
 
@@ -131,6 +136,9 @@ func _on_peer_disconnected(id: int) -> void:
 
     connected_players.erase(id)
     server_players.erase(id)
+
+    if is_instance_valid(world_network):
+        world_network.cancel_pending_player(id)
 
     if multiplayer.is_server():
         _broadcast_player_list()
@@ -983,6 +991,11 @@ func _server_mine_block(
 
     if not current_planet.destroy_block(cell):
         return
+
+    # Клиенты, которые ещё получают снимок мира, получат это изменение
+    # отдельным событием после завершения передачи снимка.
+    if is_instance_valid(world_network):
+        world_network.queue_mined_cell(cell)
 
     receive_block_destroyed.rpc(cell)
 
