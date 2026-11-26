@@ -383,6 +383,10 @@ static func move_capsule(
                 break
 
         if projected.length_squared() >= remaining.length_squared() - 0.0000001:
+            # Контакт может быть касательным (например, пол при ходьбе).
+            # Если движение не направлено внутрь поверхности, нельзя
+            # останавливать игрока: оставшаяся траектория безопасна.
+            position += remaining
             break
         remaining = projected
 
