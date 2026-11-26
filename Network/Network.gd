@@ -1344,8 +1344,8 @@ func _update_remote_players() -> void:
 			)
 			up = (position - center).normalized()
 
-			var first_up := (first["position"] - center).normalized()
-			var second_up := (second["position"] - center).normalized()
+			var first_up: Vector3 = (first["position"] as Vector3 - center).normalized()
+			var second_up: Vector3 = (second["position"] as Vector3 - center).normalized()
 			heading = _interpolate_tangent_heading(
 				first["heading"],
 				first_up,
