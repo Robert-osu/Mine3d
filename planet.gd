@@ -1169,24 +1169,43 @@ func get_planet_center() -> Vector3:
 
 
 func is_solid(x: int, y: int, z: int) -> bool:
-    if x < 0 or x >= SIZE:
-        return false
-    if y < 0 or y >= SIZE:
-        return false
-    if z < 0 or z >= SIZE:
+    # Сначала отсекаем координаты за пределами планеты.
+    if x < 0 or x >= SIZE or y < 0 or y >= SIZE or z < 0 or z >= SIZE:
         return false
 
+    # Координаты центра блока вдвое масштабированы:
+    # 2 * (x + 0.5 - SIZE / 2) == 2 * x + 1 - SIZE.
+    # Это позволяет выполнить проверку сферы целочисленно,
+    # без создания Vector3 и нескольких преобразований float.
+    var dx: int = x * 2 + 1 - SIZE
+    var dy: int = y * 2 + 1 - SIZE
+    var dz: int = z * 2 + 1 - SIZE
+    var radius_twice: int = roundi(RADIUS * 2.0)
+
+    if dx * dx + dy * dy + dz * dz > radius_twice * radius_twice:
+        return false
+
+    # Проверку изменений мира выполняем только для блоков внутри сферы.
+    # Сдвиги и маски эквивалентны делению и posmod для координат >= 0,
+    # но не создают промежуточные Vector3i и не вызывают отдельные функции.
     if not section_deltas.is_empty():
-        if is_block_destroyed(Vector3i(x, y, z)):
-            return false
+        var section_key := Vector3i(x >> 3, y >> 3, z >> 3)
+        var delta: PackedByteArray = section_deltas.get(
+            section_key,
+            PackedByteArray()
+        )
 
-    var half_size := float(SIZE) * 0.5
+        if not delta.is_empty():
+            var local_index: int = (
+                ((z & 7) << 6)
+                | ((y & 7) << 3)
+                | (x & 7)
+            )
 
-    var dx := float(x) + 0.5 - half_size
-    var dy := float(y) + 0.5 - half_size
-    var dz := float(z) + 0.5 - half_size
+            if delta[local_index] != 0:
+                return false
 
-    return dx * dx + dy * dy + dz * dz <= RADIUS * RADIUS
+    return true
 
 
 
