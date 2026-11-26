@@ -1036,6 +1036,9 @@ func _reconcile_player(
 		0,
 		pending_inputs.size() - MAX_RECONCILIATION_REPLAY_INPUTS
 	)
+	if replay_start > 0:
+		previous_buttons = int(pending_inputs[replay_start - 1]["buttons"])
+
 	for replay_index in range(replay_start, pending_inputs.size()):
 		var frame: Dictionary = pending_inputs[replay_index]
 		var result := _simulate_movement(

@@ -11,6 +11,7 @@ class_name VoxelCollision
 
 const COLLISION_RADIUS: float = 0.35
 const COLLISION_HEIGHT: float = 1.4
+const MAX_MOVE_STEPS: int = 16
 
 class CollisionResult:
     var collided: bool = false
@@ -136,7 +137,6 @@ static func move_capsule(
 
     # Ограничиваем размер шага и общее число шагов.
     # Это защищает от аномально большого перемещения за один вызов.
-    const MAX_MOVE_STEPS: int = 16
     var max_step := COLLISION_RADIUS * 0.5
     var max_distance := max_step * MAX_MOVE_STEPS
     var distance := displacement.length()
