@@ -32,14 +32,18 @@ class_name GameSettings
 @export_range(1, 16) var max_section_jobs_per_frame: int = 2
 
 # ============================================================
-# MOVEMENT
+# PLAYER
 # ============================================================
 
 @export_group("Movement")
-@export var move_speed: float = 50.0
+@export var move_speed: float = 10.0
 @export var acceleration: float = 20.0
-@export var gravity: float = 6.6
+@export var gravity: float = 18
 @export var jump_force: float = 10.5
+
+@export_group("Mining")
+
+@export_range(1.0, 100.0, 0.5) var mining_distance: float = 10.0
 
 # ============================================================
 # COLLISION
