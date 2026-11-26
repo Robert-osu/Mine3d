@@ -14,6 +14,7 @@ func on_client_connected() -> void:
     )
 
 
+
 # Клиент отправляет запрос серверу.
 @rpc("any_peer", "call_remote", "reliable", 0)
 func hello(version: int, requested_name: String) -> void:
@@ -38,18 +39,19 @@ func hello(version: int, requested_name: String) -> void:
     if Network.connected_players.has(sender_id):
         return
 
-    Network.connected_players[sender_id] = {
-        "name": clean_name
-    }
-
-    # Создаём серверную модель персонажа.
-    Network.create_server_player(sender_id)
-
+    # Сначала проверяем наличие планеты.
     var current_planet := Network._get_planet()
 
     if current_planet == null:
         reject.rpc_id(sender_id, "Server planet not found")
         return
+
+    # Только после всех проверок регистрируем игрока.
+    Network.connected_players[sender_id] = {
+        "name": clean_name
+    }
+
+    Network.create_server_player(sender_id)
 
     print("PLAYER AUTHORIZED: ", clean_name, " ID: ", sender_id)
 

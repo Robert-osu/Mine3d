@@ -947,7 +947,6 @@ func _server_mine_block(
     server_player: ServerPlayer,
     current_planet: Planet
 ) -> void:
-    
 
     var center := current_planet.to_global(
         current_planet.get_planet_center()
@@ -957,8 +956,15 @@ func _server_mine_block(
         server_player.position - center
     ).normalized()
 
-    var ray_origin := server_player.position + up * 0.8
+    # Запрещаем добычу при любом движении,
+    # включая прыжок, падение и скольжение.
+    if server_player.move_input.length_squared() > 0.05:
+        return
 
+    if server_player.velocity.length_squared() > 0.05:
+        return
+
+    var ray_origin := server_player.position + up * 0.8
     var ray_direction := server_player.look_direction.normalized()
 
     var cell := current_planet.get_mined_cell(
@@ -983,3 +989,4 @@ func _server_mine_block(
         " | CELL: ",
         cell
     )
+

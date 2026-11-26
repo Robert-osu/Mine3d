@@ -25,6 +25,7 @@ var mining_requested := false
 var spawn_ready := false
 var is_remote: bool = false
 
+var mining_ray: MeshInstance3D
 
 func _ready() -> void:
     if is_remote:
@@ -90,7 +91,6 @@ func _ready() -> void:
     camera.make_current()
 
     create_flashlight()
-
 
 func _notification(what: int) -> void:
     if what == NOTIFICATION_APPLICATION_FOCUS_IN and not is_remote:
@@ -215,15 +215,25 @@ func _physics_process(delta: float) -> void:
     # Обновляем чанки.
     planet.update_streaming(global_position)
 
-    # Добыча.
+    # Добыча разрешена только в состоянии покоя.
     if mining_requested:
         mining_requested = false
+
+        var is_moving := (
+            input.length_squared() > 0.01
+            or velocity.length_squared() > 0.01
+        )
+
+        if is_moving:
+            return
+
         print(
             "CLIENT MINE | POSITION: ",
             global_position,
             " | LOOK: ",
             -camera.global_basis.z
         )
+
         mine_block()
 
 func update_orientation(up: Vector3) -> void:
