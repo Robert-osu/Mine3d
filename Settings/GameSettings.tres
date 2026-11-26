@@ -11,7 +11,7 @@ planet_scale = 1000
 terrain_color = Color(0.545098, 0.462745, 0.368627, 1)
 
 ; Chunks
-load_radius = 8
+load_radius = 3
 air_chunks_above = 4
 unload_radius = 3
 blocks_per_frame = 512
