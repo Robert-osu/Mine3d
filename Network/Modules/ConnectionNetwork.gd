@@ -57,7 +57,7 @@ func hello(version: int, requested_name: String) -> void:
 
     var world_config := {
         "planet_scale": current_planet.settings.planet_scale,
-        "terrain_color": current_planet.settings.terrain_color.to_html(),
+        "terrain_color": current_planet.world_terrain_color.to_html(),
     }
 
     welcome.rpc_id(
@@ -94,18 +94,20 @@ func welcome(
         return
 
     var server_scale: int = int(world_config["planet_scale"])
-
-    if not current_planet.configure_world(server_scale):
-        push_error("Failed to apply server world configuration!")
-        return
+    var server_terrain_color := Color("#8b765e")
 
     if world_config.has("terrain_color"):
-        current_planet.settings.terrain_color = Color.from_string(
+        server_terrain_color = Color.from_string(
             str(world_config["terrain_color"]),
-            Color("#8b765e")
+            server_terrain_color
         )
 
-        current_planet.terrain_material.albedo_color = current_planet.settings.terrain_color
+    if not current_planet.configure_world(
+        server_scale,
+        server_terrain_color
+    ):
+        push_error("Failed to apply server world configuration!")
+        return
 
     connected = true
 
