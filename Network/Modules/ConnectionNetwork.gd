@@ -14,7 +14,6 @@ func on_client_connected() -> void:
     )
 
 
-
 # Клиент отправляет запрос серверу.
 @rpc("any_peer", "call_remote", "reliable", 0)
 func hello(version: int, requested_name: String) -> void:
@@ -36,27 +35,32 @@ func hello(version: int, requested_name: String) -> void:
         reject.rpc_id(sender_id, "Invalid player name")
         return
 
-    if Network.connected_players.has(sender_id):
+    if (
+        Network.connected_players.has(sender_id)
+        or Network.world_network.pending_players.has(sender_id)
+    ):
         return
 
-    # Сначала проверяем наличие планеты.
     var current_planet := Network._get_planet()
 
     if current_planet == null:
         reject.rpc_id(sender_id, "Server planet not found")
         return
 
-    # Только после всех проверок регистрируем игрока.
-    Network.connected_players[sender_id] = {
-        "name": clean_name
-    }
-
-    Network.create_server_player(sender_id)
+    if not Network.world_network.begin_player_sync(sender_id, clean_name):
+        reject.rpc_id(sender_id, "Could not initialize world synchronization")
+        return
 
     print("PLAYER AUTHORIZED: ", clean_name, " ID: ", sender_id)
 
+    var server_scale := (
+        current_planet.world_scale
+        if current_planet.world_scale > 0
+        else current_planet.settings.planet_scale
+    )
+
     var world_config := {
-        "planet_scale": current_planet.settings.planet_scale,
+        "planet_scale": server_scale,
         "terrain_color": current_planet.world_terrain_color.to_html(),
     }
 
@@ -66,16 +70,13 @@ func hello(version: int, requested_name: String) -> void:
         world_config
     )
 
-    Network._broadcast_player_list()
 
-
-# Сервер подтверждает подключение.
+# Сервер передаёт конфигурацию мира.
 @rpc("authority", "call_remote", "reliable", 0)
 func welcome(
     server_assigned_id: int,
     world_config: Dictionary
 ) -> void:
-
     if connected:
         return
 
@@ -109,11 +110,12 @@ func welcome(
         push_error("Failed to apply server world configuration!")
         return
 
-    connected = true
+    Network.world_network.reset_client_sync()
+    Network.world_network.request_world_sync.rpc_id(1)
 
-    print("JOIN ACCEPTED")
-    print("MY NETWORK ID: ", server_assigned_id)
-    print("CONNECTED TO SERVER WORLD")
+    print("WORLD CONFIG RECEIVED")
+    print("SYNCHRONIZING PLANET STATE...")
+
 
 # Сервер отклоняет подключение.
 @rpc("authority", "call_remote", "reliable", 0)
@@ -122,4 +124,3 @@ func reject(reason: String) -> void:
 
     connected = false
     multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
-
