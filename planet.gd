@@ -5,6 +5,7 @@ class_name Planet
 var diag_collision_calls: int = 0
 var diag_collision_cells: int = 0
 var diag_collision_max_usec: int = 0
+var diag_collision_phases: Dictionary = {}
 var diag_ray_calls: int = 0
 var diag_ray_steps: int = 0
 var diag_ray_max_steps: int = 0
@@ -13,10 +14,23 @@ var diag_destroy_max_usec: int = 0
 var diag_section_queue_max: int = 0
 
 
-func record_collision_diagnostic(cells_checked: int, elapsed_usec: int) -> void:
+func record_collision_diagnostic(
+    phase: StringName,
+    cells_checked: int,
+    elapsed_usec: int
+) -> void:
     diag_collision_calls += 1
     diag_collision_cells += cells_checked
     diag_collision_max_usec = maxi(diag_collision_max_usec, elapsed_usec)
+
+    var phase_stats: Array = diag_collision_phases.get(
+        phase,
+        [0, 0, 0]
+    )
+    phase_stats[0] += 1
+    phase_stats[1] += cells_checked
+    phase_stats[2] = maxi(int(phase_stats[2]), elapsed_usec)
+    diag_collision_phases[phase] = phase_stats
 
 
 func _record_mining_ray_diagnostic(steps: int) -> void:
@@ -35,6 +49,7 @@ func consume_mining_debug_stats() -> Dictionary:
         "collision_calls": diag_collision_calls,
         "collision_cells": diag_collision_cells,
         "collision_max_usec": diag_collision_max_usec,
+        "collision_phases": diag_collision_phases.duplicate(true),
         "ray_calls": diag_ray_calls,
         "ray_steps": diag_ray_steps,
         "ray_max_steps": diag_ray_max_steps,
@@ -46,6 +61,7 @@ func consume_mining_debug_stats() -> Dictionary:
     diag_collision_calls = 0
     diag_collision_cells = 0
     diag_collision_max_usec = 0
+    diag_collision_phases.clear()
     diag_ray_calls = 0
     diag_ray_steps = 0
     diag_ray_max_steps = 0
