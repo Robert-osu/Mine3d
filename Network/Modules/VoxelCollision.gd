@@ -522,10 +522,11 @@ static func has_capsule_support(
     var local_up: Vector3 = (
         planet.global_transform.basis.inverse() * up
     ).normalized()
+    if local_up.length_squared() < 0.0001:
+        return false
 
-    # Оцениваем опору по площади под ногами, а не по одному контакту.
-    # 13 равномерно распределённых проб: центр и 12 точек кольца.
-    # Не менее 7 из 13 точек должны иметь открытую верхнюю грань блока.
+    # world_position уже немного смещён вызывающей стороной вниз.
+    # Берём проекцию footprint в плоскости под нижним полюсом капсулы.
     var foot_center: Vector3 = (
         world_position - up * (COLLISION_HEIGHT * 0.5)
     )
@@ -537,110 +538,163 @@ static func has_capsule_support(
     var tangent_right: Vector3 = up.cross(reference_axis).normalized()
     var tangent_forward: Vector3 = tangent_right.cross(up).normalized()
 
-    var dominant_axis: int = 0
-    if absf(local_up.y) > absf(local_up.x):
-        dominant_axis = 1
-    if absf(local_up.z) > absf(local_up[dominant_axis]):
-        dominant_axis = 2
+    # Центр + 4 внутренние + 8 внешних точек. Такое распределение
+    # лучше приближает площадь диска, чем одно кольцо из 12 точек.
+    var sample_offsets: Array[Vector2] = [Vector2.ZERO]
+    var inner_radius: float = COLLISION_RADIUS * 0.35
+    var outer_radius: float = COLLISION_RADIUS * 0.8
 
-    var face_step := Vector3i.ZERO
-    var face_direction: int = 1 if local_up[dominant_axis] >= 0.0 else -1
-    if dominant_axis == 0:
-        face_step.x = face_direction
-    elif dominant_axis == 1:
-        face_step.y = face_direction
-    else:
-        face_step.z = face_direction
-
-    var face_alignment: float = absf(local_up[dominant_axis])
-    var supported_samples: int = 0
-
-    for sample_index in range(SUPPORT_SAMPLE_COUNT):
-        var offset := Vector2.ZERO
-        if sample_index > 0:
-            var angle: float = (
-                TAU * float(sample_index - 1) / float(SUPPORT_SAMPLE_COUNT - 1)
-            )
-            offset = Vector2(cos(angle), sin(angle)) * (COLLISION_RADIUS * 0.8)
-
-        # У нижней полусферы капсулы крайние точки выше нижнего полюса.
-        # Учитываем sagitta, иначе кольцевые пробы оказываются слишком низко
-        # и опора ошибочно теряется ещё до фактического схода с края.
-        var sample_radius: float = offset.length()
-        var sphere_height: float = COLLISION_RADIUS - sqrt(
-            maxf(
-                0.0,
-                COLLISION_RADIUS * COLLISION_RADIUS
-                - sample_radius * sample_radius
-            )
+    for i in range(4):
+        var angle: float = TAU * float(i) / 4.0
+        sample_offsets.append(
+            Vector2(cos(angle), sin(angle)) * inner_radius
         )
 
+    for i in range(8):
+        var angle: float = TAU * float(i) / 8.0
+        sample_offsets.append(
+            Vector2(cos(angle), sin(angle)) * outer_radius
+        )
+
+    var cache: Variant = solid_cache
+    if cache == null:
+        cache = {}
+
+    var supported_samples: int = 0
+    var required_samples: int = 7
+    var ray_start_height: float = 0.22 * planet.BLOCK_SIZE
+    var ray_length: float = 0.42 * planet.BLOCK_SIZE
+    var ray_step: float = 0.2 * planet.BLOCK_SIZE
+
+    for offset in sample_offsets:
         var sample_world: Vector3 = (
             foot_center
-            + up * sphere_height
             + tangent_right * offset.x
             + tangent_forward * offset.y
         )
-        var probe_local: Vector3 = planet.to_local(
-            sample_world - up * (SUPPORT_PROBE_DEPTH + sphere_height)
+        var ray_start: Vector3 = planet.to_local(
+            sample_world + up * ray_start_height
         )
 
-        var cell := Vector3i(
-            floori(probe_local.x / planet.BLOCK_SIZE),
-            floori(probe_local.y / planet.BLOCK_SIZE),
-            floori(probe_local.z / planet.BLOCK_SIZE)
-        )
-
-        tested_cells += 1
-        if not _is_solid_cached(planet, cell.x, cell.y, cell.z, solid_cache):
-            continue
-
-        var neighbour := cell + face_step
-        tested_cells += 1
-
-        # Засчитываем только открытую грань блока, обращённую вверх.
-        if _is_solid_cached(
+        if _support_ray_hits_open_face(
             planet,
-            neighbour.x,
-            neighbour.y,
-            neighbour.z,
-            solid_cache
+            ray_start,
+            local_up,
+            ray_length,
+            ray_step,
+            cache,
+            tested_cells
         ):
-            continue
-
-        var face_distance: float
-        if face_direction > 0:
-            face_distance = (
-                float(cell[dominant_axis] + 1) * planet.BLOCK_SIZE
-                - probe_local[dominant_axis]
-            )
-        else:
-            face_distance = (
-                probe_local[dominant_axis]
-                - float(cell[dominant_axis]) * planet.BLOCK_SIZE
-            )
-
-        var allowed_face_distance: float = (
-            SUPPORT_PROBE_DEPTH * face_alignment
-            + SUPPORT_FACE_TOLERANCE * planet.BLOCK_SIZE
-        )
-
-        if face_distance >= 0.0 and face_distance <= allowed_face_distance:
             supported_samples += 1
-
-        if supported_samples >= SUPPORT_REQUIRED_SAMPLES:
-            planet.record_collision_diagnostic(
-                diagnostic_phase,
-                tested_cells,
-                Time.get_ticks_usec() - started_usec
-            )
-            return true
+            if supported_samples >= required_samples:
+                planet.record_collision_diagnostic(
+                    diagnostic_phase,
+                    tested_cells,
+                    Time.get_ticks_usec() - started_usec
+                )
+                return true
 
     planet.record_collision_diagnostic(
         diagnostic_phase,
         tested_cells,
         Time.get_ticks_usec() - started_usec
     )
+    return false
+
+
+# Ищет пересечение короткого луча с открытой гранью блока.
+# Проверяем все возможные верхние грани, а не только dominant axis:
+# на сферической планете направление гравитации обычно диагональное
+# относительно локальных осей воксельной сетки.
+static func _support_ray_hits_open_face(
+    planet: Planet,
+    ray_start: Vector3,
+    local_up: Vector3,
+    ray_length: float,
+    ray_step: float,
+    solid_cache: Variant,
+    tested_cells: int
+) -> bool:
+
+    var ray_direction: Vector3 = -local_up
+    var visited_cells: Dictionary = {}
+    var sample_distance: float = 0.0
+
+    while sample_distance <= ray_length + 0.0001:
+        var point: Vector3 = ray_start + ray_direction * sample_distance
+        var cell := Vector3i(
+            floori(point.x / planet.BLOCK_SIZE),
+            floori(point.y / planet.BLOCK_SIZE),
+            floori(point.z / planet.BLOCK_SIZE)
+        )
+
+        if not visited_cells.has(cell):
+            visited_cells[cell] = true
+            tested_cells += 1
+
+            if _is_solid_cached(
+                planet, cell.x, cell.y, cell.z, solid_cache
+            ):
+                var block_min: Vector3 = Vector3(cell) * planet.BLOCK_SIZE
+                var block_max: Vector3 = block_min + Vector3.ONE * planet.BLOCK_SIZE
+
+                for axis in range(3):
+                    var up_component: float = local_up[axis]
+                    if absf(up_component) <= 0.5:
+                        continue
+
+                    var face_sign: float = signf(up_component)
+                    var face_step := Vector3i.ZERO
+                    face_step[axis] = int(face_sign)
+
+                    var face_coordinate: float
+                    if face_sign > 0.0:
+                        face_coordinate = block_max[axis]
+                    else:
+                        face_coordinate = block_min[axis]
+
+                    var direction_component: float = ray_direction[axis]
+                    if absf(direction_component) < 0.0001:
+                        continue
+
+                    var hit_distance: float = (
+                        face_coordinate - ray_start[axis]
+                    ) / direction_component
+
+                    if hit_distance < 0.0 or hit_distance > ray_length:
+                        continue
+
+                    var hit_point: Vector3 = (
+                        ray_start + ray_direction * hit_distance
+                    )
+
+                    var inside_face: bool = true
+                    for other_axis in range(3):
+                        if other_axis == axis:
+                            continue
+                        if (
+                            hit_point[other_axis] < block_min[other_axis] - 0.001
+                            or hit_point[other_axis] > block_max[other_axis] + 0.001
+                        ):
+                            inside_face = false
+                            break
+
+                    if not inside_face:
+                        continue
+
+                    var neighbour: Vector3i = cell + face_step
+                    tested_cells += 1
+                    if not _is_solid_cached(
+                        planet,
+                        neighbour.x,
+                        neighbour.y,
+                        neighbour.z,
+                        solid_cache
+                    ):
+                        return true
+
+        sample_distance += ray_step
+
     return false
 
 static func _get_segment_box_contact(
