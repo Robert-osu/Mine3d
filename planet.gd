@@ -1763,3 +1763,31 @@ Temporary sections: %d
         "chunks": chunk_text,
         "sections": section_text
     }
+
+func configure_world(server_scale: int) -> bool:
+    if server_scale < 1 or server_scale > 1000:
+        push_error("Invalid planet scale: %d" % server_scale)
+        return false
+
+    # Не разрешаем менять размер мира,
+    # если клиент уже начал загружать чанки.
+    if not chunks.is_empty():
+        push_error("Cannot configure planet after chunk loading!")
+        return false
+
+    planet_scale = server_scale
+    SIZE = 32 * planet_scale
+    RADIUS = 14.0 * planet_scale
+
+    last_center_chunk = Vector3i(-999999, -999999, -999999)
+
+    print(
+        "WORLD CONFIG APPLIED | SCALE: ",
+        planet_scale,
+        " | SIZE: ",
+        SIZE,
+        " | RADIUS: ",
+        RADIUS
+    )
+
+    return true

@@ -9,6 +9,8 @@ radius = 0.35
 height = 1.4
 
 [sub_resource type="CapsuleMesh" id="CapsuleMesh_5vmv2"]
+radius = 0.35
+height = 1.4
 
 [sub_resource type="Environment" id="Environment_5vmv2"]
 background_mode = 1

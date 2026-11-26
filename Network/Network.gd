@@ -89,8 +89,10 @@ func _create_modules() -> void:
 
 func _ready() -> void:
     _create_modules()
-    
-    if DisplayServer.get_name() == "headless":
+
+    var args := OS.get_cmdline_user_args()
+
+    if "--server" in args:
         start_server()
     else:
         start_client("127.0.0.1")
@@ -265,6 +267,7 @@ func _on_connected() -> void:
 
 func _on_connection_failed() -> void:
     print("CONNECTION FAILED")
+    multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 
 
 func _on_server_disconnected() -> void:
@@ -282,7 +285,13 @@ func _on_server_disconnected() -> void:
 
 func register_local_player(player: CharacterBody3D) -> void:
     local_player = player
-    player_template = player
+
+    # Создаём отдельную копию для будущих удалённых игроков.
+    if is_instance_valid(player_template):
+        player_template.free()
+
+    player_template = player.duplicate() as CharacterBody3D
+    player_template.name = "PlayerTemplate"
 
     local_velocity = player.velocity
 
@@ -291,6 +300,13 @@ func register_local_player(player: CharacterBody3D) -> void:
     local_previous_buttons = 0
 
     print("LOCAL PLAYER REGISTERED")
+
+    # Создаём удалённых игроков, snapshots которых уже пришли.
+    for peer_id in remote_snapshots.keys():
+        if peer_id == multiplayer.get_unique_id():
+            continue
+
+        _ensure_remote_player(peer_id)
 
 
 # ============================================================
@@ -782,12 +798,20 @@ func _add_remote_snapshot(
     remote_snapshots[player_id] = history
 
 
-func _ensure_remote_player(player_id: int) -> void:
-    if remote_players.has(player_id):
+func _ensure_remote_player(peer_id: int) -> void:
+    # Не создаём собственного удалённого персонажа.
+    if peer_id == multiplayer.get_unique_id():
         return
 
+    # Проверяем существующего персонажа.
+    if remote_players.has(peer_id):
+        if is_instance_valid(remote_players[peer_id]):
+            return
+
+        remote_players.erase(peer_id)
+
+    # Шаблон должен существовать и быть действительным.
     if not is_instance_valid(player_template):
-        push_error("Player template not registered!")
         return
 
     var current_planet := _get_planet()
@@ -801,17 +825,15 @@ func _ensure_remote_player(player_id: int) -> void:
         push_error("Failed to duplicate Player!")
         return
 
-    remote_player.name = "RemotePlayer_%d" % player_id
-
-    # Включаем удалённый режим до добавления в дерево.
+    remote_player.name = "RemotePlayer_%d" % peer_id
     remote_player.set("is_remote", true)
     remote_player.set("planet", current_planet)
 
     get_tree().current_scene.add_child(remote_player)
 
-    remote_players[player_id] = remote_player
+    remote_players[peer_id] = remote_player
 
-    print("REMOTE PLAYER CREATED: ", player_id)
+    print("REMOTE PLAYER CREATED: ", peer_id)
 
 func _remove_remote_player(player_id: int) -> void:
     if remote_players.has(player_id):

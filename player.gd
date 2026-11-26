@@ -40,207 +40,214 @@ var is_remote: bool = false
 
 
 func _ready() -> void:
-	if is_remote:
-		# Удалённому игроку не нужна камера.
-		camera_pivot.visible = false
-		camera.current = false
+    if is_remote:
+        # Удалённому игроку не нужна камера.
+        camera_pivot.visible = false
+        camera.current = false
 
-		# Удалённые персонажи не участвуют
-		# в локальной физике.
-		collision_shape.disabled = true
+        # Удалённые персонажи не участвуют
+        # в локальной физике.
+        collision_shape.disabled = true
 
-		set_physics_process(false)
-		set_process_unhandled_input(false)
+        set_physics_process(false)
+        set_process_unhandled_input(false)
 
-		return
+        return
 
-	if planet == null:
-		push_error("Assign Planet in Player Inspector!")
-		return
+    if planet == null:
+        push_error("Assign Planet in Player Inspector!")
+        return
 
-	# $DebugPanel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# coord_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    # Клиент ждёт подтверждения подключения и настройки мира.
+    if not multiplayer.is_server():
+        while not Network.connection_network.connected:
+            if not multiplayer.has_multiplayer_peer():
+                return
 
-	var center := planet.to_global(planet.get_planet_center())
+            await get_tree().process_frame
 
-	var spawn_direction := Vector3.UP
+    var center := planet.to_global(planet.get_planet_center())
 
-	var direction := Vector3.UP
+    var spawn_direction := Vector3.UP
 
-	var surface_point := center + direction * (planet.RADIUS - 0.5)
+    var direction := Vector3.UP
 
-	global_position = center + direction * (planet.RADIUS + 3.0)
+    var surface_point := center + direction * (planet.RADIUS - 0.5)
 
-	planet.update_streaming(global_position)
+    global_position = center + direction * (planet.RADIUS + 3.0)
 
-	while not planet.has_collision_at(surface_point):
-		await get_tree().process_frame
+    planet.update_streaming(global_position)
 
-	spawn_ready = true
+    while not planet.has_collision_at(surface_point):
+        await get_tree().process_frame
 
-	Network.register_local_player(self)
-	
+    spawn_ready = true
 
-	heading = Vector3.FORWARD.slide(spawn_direction).normalized()
+    Network.register_local_player(self)
+    
 
-	up_direction = spawn_direction
-	update_orientation(spawn_direction)
+    heading = Vector3.FORWARD.slide(spawn_direction).normalized()
 
-	# Камера находится непосредственно на персонаже.
-	camera_pivot.position = Vector3(0, camera_height, 0)
-	camera_pivot.rotation = Vector3.ZERO
+    up_direction = spawn_direction
+    update_orientation(spawn_direction)
 
-	visual_rest_position = visual.position
-	camera_rest_position = camera_pivot.position
+    # Камера находится непосредственно на персонаже.
+    camera_pivot.position = Vector3(0, camera_height, 0)
+    camera_pivot.rotation = Vector3.ZERO
 
-	camera.position = Vector3.ZERO
-	camera.rotation = Vector3.ZERO
-	camera.make_current()
+    visual_rest_position = visual.position
+    camera_rest_position = camera_pivot.position
 
-	create_flashlight()
+    camera.position = Vector3.ZERO
+    camera.rotation = Vector3.ZERO
+    camera.make_current()
 
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+    create_flashlight()
 
+
+func _notification(what: int) -> void:
+    if what == NOTIFICATION_APPLICATION_FOCUS_IN and not is_remote:
+        Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func apply_reconciliation_correction(old_position: Vector3) -> void:
-	var world_offset := old_position - global_position
-	var local_offset := global_basis.inverse() * world_offset
+    var world_offset := old_position - global_position
+    var local_offset := global_basis.inverse() * world_offset
 
-	visual.position += local_offset
-	camera_pivot.position += local_offset
+    visual.position += local_offset
+    camera_pivot.position += local_offset
 
 func create_flashlight() -> void:
-	var flashlight := SpotLight3D.new()
+    var flashlight := SpotLight3D.new()
 
-	flashlight.name = "Flashlight"
-	flashlight.position = Vector3.ZERO
-	flashlight.rotation = Vector3.ZERO
+    flashlight.name = "Flashlight"
+    flashlight.position = Vector3.ZERO
+    flashlight.rotation = Vector3.ZERO
 
-	flashlight.spot_range = flashlight_range
-	flashlight.spot_angle = flashlight_angle
-	flashlight.light_energy = flashlight_energy
+    flashlight.spot_range = flashlight_range
+    flashlight.spot_angle = flashlight_angle
+    flashlight.light_energy = flashlight_energy
 
-	flashlight.spot_attenuation = 1.0
-	flashlight.shadow_enabled = true
-	flashlight.light_color = Color(0.85, 0.92, 1.0)
+    flashlight.spot_attenuation = 1.0
+    flashlight.shadow_enabled = true
+    flashlight.light_color = Color(0.85, 0.92, 1.0)
 
-	camera.add_child(flashlight)
+    camera.add_child(flashlight)
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion:
-		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-			if planet != null:
-				var center := planet.to_global(Vector3(planet.SIZE / 2.0, planet.SIZE / 2.0, planet.SIZE / 2.0))
-				var up := (global_position - center).normalized()
+    if event is InputEventMouseMotion:
+        if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+            if planet != null:
+                var center := planet.to_global(Vector3(planet.SIZE / 2.0, planet.SIZE / 2.0, planet.SIZE / 2.0))
+                var up := (global_position - center).normalized()
 
-				# Поворачиваем персонажа по горизонтали.
-				heading = heading.rotated(
-					up,
-					-event.relative.x * mouse_sensitivity
-				).normalized()
+                # Поворачиваем персонажа по горизонтали.
+                heading = heading.rotated(
+                    up,
+                    -event.relative.x * mouse_sensitivity
+                ).normalized()
 
-			# Вертикальный поворот только камеры.
-			camera_pivot.rotation.x -= event.relative.y * mouse_sensitivity
+            # Вертикальный поворот только камеры.
+            camera_pivot.rotation.x -= event.relative.y * mouse_sensitivity
 
-			camera_pivot.rotation.x = clampf(
-				camera_pivot.rotation.x,
-				deg_to_rad(min_pitch),
-				deg_to_rad(max_pitch)
-			)
+            camera_pivot.rotation.x = clampf(
+                camera_pivot.rotation.x,
+                deg_to_rad(min_pitch),
+                deg_to_rad(max_pitch)
+            )
 
-	if event is InputEventKey:
-		if event.pressed and event.keycode == KEY_ESCAPE:
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+    if event is InputEventKey:
+        if event.pressed and event.keycode == KEY_ESCAPE:
+            Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
-	if event is InputEventMouseButton:
-		if event.pressed:
-			if event.button_index == MOUSE_BUTTON_LEFT:
-				if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-					mining_requested = true
+    if event is InputEventMouseButton:
+        if event.pressed:
+            if event.button_index == MOUSE_BUTTON_LEFT:
+                if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+                    mining_requested = true
 
-			if event.button_index == MOUSE_BUTTON_RIGHT:
-				if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
-					Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+            if event.button_index == MOUSE_BUTTON_RIGHT:
+                if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
+                    Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _physics_process(delta: float) -> void:
-	if is_remote:
-		return
+    if is_remote:
+        return
 
-	var weight := 1.0 - exp(-VISUAL_CORRECTION_SPEED * delta)
+    var weight := 1.0 - exp(-VISUAL_CORRECTION_SPEED * delta)
 
-	visual.position = visual.position.lerp(
-		visual_rest_position,
-		weight
-	)
+    visual.position = visual.position.lerp(
+        visual_rest_position,
+        weight
+    )
 
-	camera_pivot.position = camera_pivot.position.lerp(
-		camera_rest_position,
-		weight
-	)
+    camera_pivot.position = camera_pivot.position.lerp(
+        camera_rest_position,
+        weight
+    )
 
-	if not spawn_ready:
-		return
+    if not spawn_ready:
+        return
 
-	if planet == null:
-		return
+    if planet == null:
+        return
 
-	var center := planet.to_global(planet.get_planet_center())
-	var up := (global_position - center).normalized()
+    var center := planet.to_global(planet.get_planet_center())
+    var up := (global_position - center).normalized()
 
-	up_direction = up
+    up_direction = up
 
-	update_orientation(up)
+    update_orientation(up)
 
-	# Получаем ввод.
-	var input := Input.get_vector(
-		"move_left",
-		"move_right",
-		"move_forward",
-		"move_backward"
-	)
+    # Получаем ввод.
+    var input := Input.get_vector(
+        "move_left",
+        "move_right",
+        "move_forward",
+        "move_backward"
+    )
 
-	# Направление камеры.
-	var look_direction := -camera.global_basis.z
+    # Направление камеры.
+    var look_direction := -camera.global_basis.z
 
-	# Кнопки.
-	var buttons := NetworkProtocol.Buttons.NONE
+    # Кнопки.
+    var buttons := NetworkProtocol.Buttons.NONE
 
-	if Input.is_action_pressed("jump"):
-		buttons |= NetworkProtocol.Buttons.JUMP
+    if Input.is_action_pressed("jump"):
+        buttons |= NetworkProtocol.Buttons.JUMP
 
-	# Серверная симуляция + клиентское предсказание.
-	Network.process_local_player(
-		self,
-		delta,
-		input,
-		look_direction,
-		buttons
-	)
+    # Серверная симуляция + клиентское предсказание.
+    Network.process_local_player(
+        self,
+        delta,
+        input,
+        look_direction,
+        buttons
+    )
 
-	# Обновляем чанки.
-	planet.update_streaming(global_position)
+    # Обновляем чанки.
+    planet.update_streaming(global_position)
 
-	# Добыча.
-	if mining_requested:
-		mining_requested = false
-		mine_block()
+    # Добыча.
+    if mining_requested:
+        mining_requested = false
+        mine_block()
 
 func update_orientation(up: Vector3) -> void:
-	heading = heading.slide(up).normalized()
+    heading = heading.slide(up).normalized()
 
-	if heading.length_squared() < 0.001:
-		heading = Vector3.FORWARD.slide(up).normalized()
+    if heading.length_squared() < 0.001:
+        heading = Vector3.FORWARD.slide(up).normalized()
 
-	var right := heading.cross(up).normalized()
-	var backward := -heading
+    var right := heading.cross(up).normalized()
+    var backward := -heading
 
-	global_basis = Basis(
-		right,
-		up,
-		backward
-	).orthonormalized()
+    global_basis = Basis(
+        right,
+        up,
+        backward
+    ).orthonormalized()
 
 func mine_block() -> void:
-	Network.request_mine.rpc_id(1)
+    Network.request_mine.rpc_id(1)
 
