@@ -1393,7 +1393,7 @@ func _ensure_remote_player(peer_id: int) -> void:
 
 	remote_players[peer_id] = remote_player
 
-	func _remove_remote_player(player_id: int) -> void:
+func _remove_remote_player(player_id: int) -> void:
 	if remote_players.has(player_id):
 		var remote_player: Node = remote_players[player_id]
 
