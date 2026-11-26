@@ -1832,6 +1832,10 @@ func configure_world(
         push_error("Cannot configure planet after chunk loading!")
         return false
 
+    # Новый серверный снимок полностью заменяет старые изменения мира.
+    # configure_world вызывается до генерации чанков на клиенте.
+    section_deltas.clear()
+
     # Настраиваем только этот экземпляр планеты.
     # Общий GameSettings ресурс не изменяется.
     world_scale = server_scale

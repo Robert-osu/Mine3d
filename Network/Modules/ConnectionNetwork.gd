@@ -64,10 +64,17 @@ func hello(version: int, requested_name: String) -> void:
         "terrain_color": current_planet.world_terrain_color.to_html(),
     }
 
+    var sync_id := Network.world_network.get_player_sync_id(sender_id)
+    if sync_id < 0:
+        reject.rpc_id(sender_id, "Could not initialize world synchronization")
+        Network.world_network.cancel_pending_player(sender_id)
+        return
+
     welcome.rpc_id(
         sender_id,
         sender_id,
-        world_config
+        world_config,
+        sync_id
     )
 
 
@@ -75,7 +82,8 @@ func hello(version: int, requested_name: String) -> void:
 @rpc("authority", "call_remote", "reliable", 0)
 func welcome(
     server_assigned_id: int,
-    world_config: Dictionary
+    world_config: Dictionary,
+    sync_id: int
 ) -> void:
     if connected:
         return
@@ -110,8 +118,12 @@ func welcome(
         push_error("Failed to apply server world configuration!")
         return
 
-    Network.world_network.reset_client_sync()
-    Network.world_network.request_world_sync.rpc_id(1)
+    if sync_id <= 0:
+        push_error("Invalid world sync ID!")
+        return
+
+    Network.world_network.reset_client_sync(sync_id)
+    Network.world_network.request_world_sync.rpc_id(1, sync_id)
 
     print("WORLD CONFIG RECEIVED")
     print("SYNCHRONIZING PLANET STATE...")
