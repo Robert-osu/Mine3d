@@ -167,6 +167,7 @@ func _flush_mining_diagnostics() -> void:
 			" | input accepted/rejected: ", diag_server_input_accepted, "/", diag_server_input_rejected,
 			" | input queue max: ", diag_server_input_queue_max,
 			" | collision calls/cells/max ms: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0), "/", "%.3f" % (float(planet_stats.get("collision_max_usec", 0)) / 1000.0),
+			" | collision phases: ", str(planet_stats.get("collision_phases", {})),
 			" | ray calls/steps max: ", planet_stats.get("ray_calls", 0), "/", planet_stats.get("ray_steps", 0), "/", planet_stats.get("ray_max_steps", 0),
 			" | destroy calls/max ms: ", planet_stats.get("destroy_calls", 0), "/", "%.3f" % (float(planet_stats.get("destroy_max_usec", 0)) / 1000.0),
 			" | section queue max: ", planet_stats.get("section_queue_max", 0)
@@ -186,6 +187,7 @@ func _flush_mining_diagnostics() -> void:
 			" | ray avg/max ms: ", "%.3f" % client_ray_avg_ms, "/", "%.3f" % (float(diag_client_ray_max_usec) / 1000.0),
 			" | pending input/mining max: ", diag_client_pending_inputs_max, "/", diag_client_pending_mining_max,
 			" | collision calls/cells/max ms: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0), "/", "%.3f" % (float(planet_stats.get("collision_max_usec", 0)) / 1000.0),
+			" | collision phases: ", str(planet_stats.get("collision_phases", {})),
 			" | ray calls/steps max: ", planet_stats.get("ray_calls", 0), "/", planet_stats.get("ray_steps", 0), "/", planet_stats.get("ray_max_steps", 0),
 			" | destroy calls/max ms: ", planet_stats.get("destroy_calls", 0), "/", "%.3f" % (float(planet_stats.get("destroy_max_usec", 0)) / 1000.0),
 			" | section queue max: ", planet_stats.get("section_queue_max", 0)
@@ -1127,7 +1129,8 @@ func _simulate_movement(
 	var grounded := VoxelCollision.has_capsule_support(
 		current_planet,
 		current_position - up * 0.08,
-		up
+		up,
+		&"support_before_move"
 	)
 
 	# Проверяем нажатие прыжка.
@@ -1163,7 +1166,8 @@ func _simulate_movement(
 	var collision := VoxelCollision.get_capsule_collision(
 		current_planet,
 		new_position,
-		up
+		up,
+		&"movement_final"
 	)
 
 	# Если капсула уже выталкивается из стены,
@@ -1182,7 +1186,8 @@ func _simulate_movement(
 		collision = VoxelCollision.get_capsule_collision(
 			current_planet,
 			probe_position,
-			probe_up
+			probe_up,
+			&"movement_probe"
 		)
 
 	# Убираем скорость, направленную внутрь препятствия.
@@ -1199,7 +1204,8 @@ func _simulate_movement(
 	grounded = VoxelCollision.has_capsule_support(
 		current_planet,
 		new_position - new_up * 0.08,
-		new_up
+		new_up,
+		&"support_after_move"
 	)
 
 	if grounded:
