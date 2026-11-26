@@ -445,6 +445,9 @@ static func has_capsule_support(
     world_up: Vector3
 ) -> bool:
 
+    var started_usec: int = Time.get_ticks_usec()
+    var tested_cells: int = 0
+
     if planet == null:
         return false
 
@@ -486,6 +489,8 @@ static func has_capsule_support(
     for x in range(min_cell.x, max_cell.x + 1):
         for y in range(min_cell.y, max_cell.y + 1):
             for z in range(min_cell.z, max_cell.z + 1):
+                tested_cells += 1
+
                 if not planet.is_solid(x, y, z):
                     continue
 
@@ -507,8 +512,16 @@ static func has_capsule_support(
                 ).normalized()
 
                 if world_normal.dot(up) > 0.5:
+                    planet.record_collision_diagnostic(
+                        tested_cells,
+                        Time.get_ticks_usec() - started_usec
+                    )
                     return true
 
+    planet.record_collision_diagnostic(
+        tested_cells,
+        Time.get_ticks_usec() - started_usec
+    )
     return false
 
 
