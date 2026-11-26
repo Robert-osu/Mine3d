@@ -1045,11 +1045,7 @@ func _reconcile_player(
 		old_position
 	)
 
-	# Разница нужна для диагностики.
-	var error_distance := old_position.distance_to(corrected_position)
-
-	if error_distance > settings.reconciliation_epsilon:
-		# ============================================================
+	# ============================================================
 # SHARED MOVEMENT SIMULATION
 # ============================================================
 
