@@ -132,7 +132,8 @@ static func move_capsule(
         current_position = resolve_capsule_collision(
             planet,
             current_position,
-            initial_up
+            initial_up,
+            initial_collision
         )
 
     # Ограничиваем размер шага и общее число шагов.
@@ -185,7 +186,7 @@ static func move_capsule(
             var low := 0.0
             var high := 1.0
 
-            for k in range(8):
+            for k in range(6):
 
                 var middle := (low + high) * 0.5
 
@@ -457,9 +458,12 @@ static func has_capsule_support(
         planet.global_transform.basis.inverse() * up
     ).normalized()
 
+    # Для проверки опоры достаточно нижней части капсулы.
+    # Полный отрезок проверяет также область туловища и головы,
+    # хотя опорой может быть только контакт под ногами.
     var half_segment: float = COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
     var point_a: Vector3 = local_position - local_up * half_segment
-    var point_b: Vector3 = local_position + local_up * half_segment
+    var point_b: Vector3 = point_a + local_up * (COLLISION_RADIUS * 0.5)
     var margin: Vector3 = Vector3.ONE * COLLISION_RADIUS
 
     var bounds_min: Vector3 = Vector3(
@@ -593,20 +597,26 @@ static func _get_segment_box_contact(
 static func resolve_capsule_collision(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    initial_collision: CollisionResult = null
 ) -> Vector3:
 
     var position := world_position
+
+    # Первый контакт уже был рассчитан вызывающей функцией.
+    # Используем его, чтобы не сканировать ту же позицию повторно.
+    var collision: CollisionResult = initial_collision
 
     # Несколько проходов нужны, чтобы обработать углы,
     # где капсула одновременно касается нескольких блоков.
     for i in range(4):
 
-        var collision := get_capsule_collision(
-            planet,
-            position,
-            world_up
-        )
+        if collision == null:
+            collision = get_capsule_collision(
+                planet,
+                position,
+                world_up
+            )
 
         if not collision.collided:
             break
@@ -614,6 +624,7 @@ static func resolve_capsule_collision(
         position += collision.normal * (
             collision.penetration + 0.001
         )
+        collision = null
 
     return position
 
