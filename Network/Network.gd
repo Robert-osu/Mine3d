@@ -399,7 +399,7 @@ func create_server_player(id: int) -> void:
 
 	server_players[id] = server_player
 
-	func _server_physics_process(_delta: float) -> void:
+func _server_physics_process(_delta: float) -> void:
 	var current_planet := _get_planet()
 
 	if current_planet == null:
