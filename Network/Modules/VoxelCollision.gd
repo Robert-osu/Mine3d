@@ -12,6 +12,7 @@ class_name VoxelCollision
 const COLLISION_RADIUS: float = 0.35
 const COLLISION_HEIGHT: float = 1.4
 const MAX_MOVE_STEPS: int = 16
+const BINARY_SEARCH_ITERATIONS: int = 4
 
 class CollisionResult:
     var collided: bool = false
@@ -188,7 +189,11 @@ static func move_capsule(
             var low := 0.0
             var high := 1.0
 
-            for k in range(6):
+            # Четырёх итераций достаточно для точности около 1 см
+            # при максимальном шаге 0.175 м. low всегда указывает
+            # на проверенную безопасную позицию, поэтому уменьшение
+            # числа итераций не допускает прохождения сквозь блок.
+            for k in range(BINARY_SEARCH_ITERATIONS):
 
                 var middle := (low + high) * 0.5
 
