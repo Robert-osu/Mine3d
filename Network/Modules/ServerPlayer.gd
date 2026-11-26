@@ -75,8 +75,7 @@ func set_input(
     sequence: int,
     new_move_input: Vector2,
     new_look_direction: Vector3,
-    new_buttons: int,
-    delta: float
+    new_buttons: int
 ) -> void:
 
     if sequence <= last_received_input_sequence:
@@ -88,8 +87,7 @@ func set_input(
         "sequence": sequence,
         "move_input": new_move_input.limit_length(1.0),
         "look_direction": new_look_direction.normalized(),
-        "buttons": new_buttons,
-        "delta": delta
+        "buttons": new_buttons
     })
 
 # Применяем следующий инпут из очереди.
