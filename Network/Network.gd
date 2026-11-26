@@ -41,6 +41,12 @@ var input_sequence: int = 0
 # История вводов, которые ещё не подтверждены сервером.
 var pending_inputs: Array[Dictionary] = []
 
+# Локальные предсказания добычи до ответа сервера.
+# Vector2i(input_sequence, request_index) -> {cell, confirmed}
+var pending_mining_predictions: Dictionary = {}
+
+const INVALID_MINED_CELL := Vector3i(-1, -1, -1)
+
 # Состояние локального предсказания.
 var local_velocity: Vector3 = Vector3.ZERO
 var local_previous_buttons: int = 0
@@ -235,9 +241,21 @@ func _simulate_server_player(
 	server_player.finish_tick()
 
 	# Добываем после применения состояния из input, содержащего удар.
-	var mine_requests: int = input_frame.get("mine_requests", 0)
-	for _request_index in range(mine_requests):
-		_server_mine_block(server_player, current_planet)
+	var mine_requests: int = int(input_frame.get("mine_requests", 0))
+	var sequence: int = int(input_frame.get("sequence", -1))
+
+	for request_index in range(mine_requests):
+		var mined_cell := _server_mine_block(
+			server_player,
+			current_planet
+		)
+
+		mining_result.rpc_id(
+			server_player.peer_id,
+			sequence,
+			request_index,
+			mined_cell
+		)
 
 # ============================================================
 # CLIENT CONNECTION
@@ -278,6 +296,7 @@ func _on_server_disconnected() -> void:
 	print("SERVER DISCONNECTED")
 
 	pending_inputs.clear()
+	_rollback_pending_mining_predictions()
 	input_sequence = 0
 	local_velocity = Vector3.ZERO
 	local_previous_buttons = 0
@@ -300,6 +319,7 @@ func register_local_player(player: CharacterBody3D) -> void:
 	local_velocity = player.velocity
 
 	pending_inputs.clear()
+	_rollback_pending_mining_predictions()
 	input_sequence = 0
 	local_previous_buttons = 0
 
@@ -379,6 +399,42 @@ func process_local_player(
 
 	player.velocity = local_velocity
 
+	# Предсказываем добычу локально, не ожидая ответа сервера.
+	# Сервер всё равно самостоятельно определит блок по своему состоянию.
+	for request_index in range(mine_requests):
+		var predicted_cell := INVALID_MINED_CELL
+
+		if (
+			move_input.length_squared() <= 0.05
+			and bool(result["grounded"])
+		):
+			var center := current_planet.to_global(
+				current_planet.get_planet_center()
+			)
+			var up := (player.global_position - center).normalized()
+			var ray_origin := player.global_position + up * 0.8
+			var predicted_look := look_direction.normalized()
+
+			var candidate := current_planet.get_mined_cell(
+				ray_origin,
+				predicted_look,
+				settings.mining_distance
+			)
+
+			if (
+				candidate != INVALID_MINED_CELL
+				and current_planet.destroy_block(candidate)
+			):
+				predicted_cell = candidate
+
+		pending_mining_predictions[Vector2i(
+			input_sequence,
+			request_index
+		)] = {
+			"cell": predicted_cell,
+			"confirmed": false
+		}
+
 	# Отправляем ввод серверу.
 	submit_input.rpc_id(
 		1,
@@ -421,10 +477,6 @@ func submit_input(
 
 	var server_player: ServerPlayer = server_players[sender_id]
 
-	# Не позволяем клиенту бесконечно раздувать очередь надёжных RPC.
-	if server_player.input_queue.size() >= MAX_SERVER_INPUT_QUEUE:
-		return
-
 	# Проверяем порядковый номер.
 	if sequence <= server_player.last_received_input_sequence:
 		return
@@ -453,6 +505,18 @@ func submit_input(
 	var allowed_buttons := NetworkProtocol.Buttons.JUMP
 
 	if (buttons & ~allowed_buttons) != 0:
+		return
+
+	# Если очередь переполнена, явно отклоняем связанные с input удары,
+	# чтобы клиент мог отменить локальное предсказание.
+	if server_player.input_queue.size() >= MAX_SERVER_INPUT_QUEUE:
+		for request_index in range(mine_requests):
+			mining_result.rpc_id(
+				sender_id,
+				sequence,
+				request_index,
+				INVALID_MINED_CELL
+			)
 		return
 
 	server_player.set_input(
@@ -945,13 +1009,82 @@ func receive_block_destroyed(cell: Vector3i) -> void:
 	if current_planet == null:
 		return
 
-	current_planet.destroy_block(cell)
+	# Если серверное событие совпало с нашим предсказанием,
+	# запоминаем подтверждение: откатывать этот блок уже нельзя.
+	for prediction_key in pending_mining_predictions.keys():
+		var prediction: Dictionary = pending_mining_predictions[prediction_key]
+		if prediction.get("cell", INVALID_MINED_CELL) == cell:
+			prediction["confirmed"] = true
+			pending_mining_predictions[prediction_key] = prediction
+
+	if not current_planet.is_block_destroyed(cell):
+		current_planet.destroy_block(cell)
+
+
+@rpc("authority", "call_remote", "reliable")
+func mining_result(
+	sequence: int,
+	request_index: int,
+	server_cell: Vector3i
+) -> void:
+	if multiplayer.is_server():
+		return
+
+	var current_planet := _get_planet()
+	if current_planet == null:
+		return
+
+	var prediction_key := Vector2i(sequence, request_index)
+	var predicted_cell := INVALID_MINED_CELL
+	var was_confirmed := false
+
+	if pending_mining_predictions.has(prediction_key):
+		var prediction: Dictionary = pending_mining_predictions[prediction_key]
+		predicted_cell = prediction.get("cell", INVALID_MINED_CELL)
+		was_confirmed = bool(prediction.get("confirmed", false))
+		pending_mining_predictions.erase(prediction_key)
+
+	# Сервер выбрал другой блок или отклонил удар.
+	if predicted_cell != server_cell:
+		if (
+			predicted_cell != INVALID_MINED_CELL
+			and not was_confirmed
+		):
+			current_planet.restore_block(predicted_cell)
+
+		if (
+			server_cell != INVALID_MINED_CELL
+			and not current_planet.is_block_destroyed(server_cell)
+		):
+			current_planet.destroy_block(server_cell)
+	elif (
+		server_cell != INVALID_MINED_CELL
+		and not current_planet.is_block_destroyed(server_cell)
+	):
+		# Подтверждение могло прийти раньше широковещательного события.
+		current_planet.destroy_block(server_cell)
+
+
+func _rollback_pending_mining_predictions() -> void:
+	var current_planet := _get_planet()
+
+	if current_planet != null:
+		for prediction_key in pending_mining_predictions:
+			var prediction: Dictionary = pending_mining_predictions[prediction_key]
+			var cell: Vector3i = prediction.get("cell", INVALID_MINED_CELL)
+			if (
+				cell != INVALID_MINED_CELL
+				and not bool(prediction.get("confirmed", false))
+			):
+				current_planet.restore_block(cell)
+
+	pending_mining_predictions.clear()
 
 
 func _server_mine_block(
 	server_player: ServerPlayer,
 	current_planet: Planet
-) -> bool:
+) -> Vector3i:
 
 	var center := current_planet.to_global(
 		current_planet.get_planet_center()
@@ -964,10 +1097,10 @@ func _server_mine_block(
 	# Запрещаем добычу при активном движении по поверхности
 	# и в воздухе. Остаточная скорость при опоре не блокирует удар.
 	if server_player.move_input.length_squared() > 0.05:
-		return false
+		return INVALID_MINED_CELL
 
 	if not server_player.grounded:
-		return false
+		return INVALID_MINED_CELL
 
 	var ray_origin := server_player.position + up * 0.8
 	var ray_direction := server_player.look_direction.normalized()
@@ -978,11 +1111,11 @@ func _server_mine_block(
 		settings.mining_distance
 	)
 
-	if cell == Vector3i(-1, -1, -1):
-		return true
+	if cell == INVALID_MINED_CELL:
+		return INVALID_MINED_CELL
 
 	if not current_planet.destroy_block(cell):
-		return true
+		return INVALID_MINED_CELL
 
 	# Клиенты, которые ещё получают снимок мира, получат это изменение
 	# отдельным событием после завершения передачи снимка.
@@ -990,4 +1123,4 @@ func _server_mine_block(
 		world_network.queue_mined_cell(cell)
 
 	receive_block_destroyed.rpc(cell)
-	return true
+	return cell

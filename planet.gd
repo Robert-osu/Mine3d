@@ -1610,6 +1610,59 @@ func set_block_destroyed(cell: Vector3i) -> void:
 
     section_deltas[section_id] = delta
 
+
+func restore_block(cell: Vector3i) -> bool:
+    # Используется для отмены клиентского предсказания,
+    # если сервер отклонил добычу или выбрал другую ячейку.
+    if not is_block_destroyed(cell):
+        return false
+
+    var section_id := get_global_section_key(cell)
+    var delta: PackedByteArray = section_deltas[section_id]
+    delta[get_local_section_index(cell)] = 0
+
+    var has_destroyed_blocks := false
+    for value in delta:
+        if value != 0:
+            has_destroyed_blocks = true
+            break
+
+    if has_destroyed_blocks:
+        section_deltas[section_id] = delta
+    else:
+        section_deltas.erase(section_id)
+
+    # Перестраиваем секцию блока и секции соседей:
+    # это также удалит временные открытые грани, созданные при prediction.
+    var affected_cells: Array[Vector3i] = [cell]
+    for direction in DIRECTIONS:
+        affected_cells.append(cell + direction)
+
+    var queued_sections_to_rebuild: Dictionary = {}
+
+    for affected_cell in affected_cells:
+        if not is_solid(
+            affected_cell.x,
+            affected_cell.y,
+            affected_cell.z
+        ):
+            continue
+
+        var chunk_key := index_to_chunk(affected_cell)
+        var section_key := get_section_key(affected_cell)
+        var section_id_to_rebuild := make_section_id(
+            chunk_key,
+            section_key
+        )
+
+        if queued_sections_to_rebuild.has(section_id_to_rebuild):
+            continue
+
+        queued_sections_to_rebuild[section_id_to_rebuild] = true
+        rebuild_section_geometry(chunk_key, section_key)
+
+    return true
+
 func create_chunk_delta_snapshot(
     chunk_key: Vector3i
 ) -> Dictionary:
