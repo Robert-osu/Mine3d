@@ -157,6 +157,37 @@ func _on_peer_disconnected(id: int) -> void:
 		_broadcast_player_list()
 
 
+# Все участники используют одну детерминированную раскладку спавнов.
+# Золотая спираль равномерно размещает игроков компактной группой
+# вокруг северного полюса, не помещая их в одну точку.
+const SPAWN_SPACING: float = 1.25
+const SPAWN_GOLDEN_ANGLE: float = 2.399963229728653
+
+
+func get_player_spawn_position(
+	current_planet: Planet,
+	player_id: int
+) -> Vector3:
+
+	if current_planet == null:
+		return Vector3.ZERO
+
+	var slot := maxi(player_id - 1, 0)
+	var distance := SPAWN_SPACING * sqrt(float(slot))
+	var angle := float(slot) * SPAWN_GOLDEN_ANGLE
+
+	var local_direction := Vector3(
+		cos(angle) * distance,
+		current_planet.RADIUS,
+		sin(angle) * distance
+	).normalized()
+
+	return current_planet.to_global(
+		current_planet.get_planet_center()
+		+ local_direction * (current_planet.RADIUS + 3.0)
+	)
+
+
 func create_server_player(id: int) -> void:
 	if not multiplayer.is_server():
 		return
@@ -170,13 +201,9 @@ func create_server_player(id: int) -> void:
 		push_error("Planet not found on server!")
 		return
 
-	var center := current_planet.to_global(
-		current_planet.get_planet_center()
-	)
-
-	var spawn_direction := Vector3.UP
-	var spawn_position := center + spawn_direction * (
-		current_planet.RADIUS + 3.0
+	var spawn_position := get_player_spawn_position(
+		current_planet,
+		id
 	)
 
 	var server_player := ServerPlayer.new(id, spawn_position)

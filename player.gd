@@ -55,18 +55,32 @@ func _ready() -> void:
             await get_tree().process_frame
 
     var center := planet.to_global(planet.get_planet_center())
+    var player_id := multiplayer.get_unique_id()
+    var spawn_position := Network.get_player_spawn_position(
+        planet,
+        player_id
+    )
+    var spawn_direction := (spawn_position - center).normalized()
+    var surface_point := center + spawn_direction * (planet.RADIUS - 0.5)
 
-    var spawn_direction := Vector3.UP
-
-    var direction := Vector3.UP
-
-    var surface_point := center + direction * (planet.RADIUS - 0.5)
-
-    global_position = center + direction * (planet.RADIUS + 3.0)
-
+    global_position = spawn_position
     planet.update_streaming(global_position)
 
+    # Не ждём бесконечно, если точка появления повреждена
+    # или нужная секция мира не смогла сгенерироваться.
+    var spawn_wait_started := Time.get_ticks_msec()
+    const SPAWN_TIMEOUT_MSEC: int = 15000
+
     while not planet.has_collision_at(surface_point):
+        if Time.get_ticks_msec() - spawn_wait_started >= SPAWN_TIMEOUT_MSEC:
+            push_error(
+                "Player spawn timed out. ID: ",
+                player_id,
+                " | Position: ",
+                spawn_position
+            )
+            return
+
         await get_tree().process_frame
 
     spawn_ready = true
