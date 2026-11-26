@@ -109,14 +109,7 @@ func broadcast_player_list() -> void:
 func sync_player_list(players: Dictionary) -> void:
 	visible_players = players.duplicate(true)
 
-	print("========== PLAYERS ONLINE ==========")
-
-	for id in visible_players:
+		for id in visible_players:
 		var player_data: Dictionary = visible_players[id]
 
-		print(
-			"ID: ", id,
-			" | NAME: ", player_data["name"]
-		)
-
-	print("====================================")
+			print("====================================")
