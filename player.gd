@@ -54,17 +54,17 @@ func _ready() -> void:
 
             await get_tree().process_frame
 
-    var surface_point := Network.get_player_spawn_surface_point(
+    var surface_point: Vector3 = Network.get_player_spawn_surface_point(
         planet,
         Network.local_spawn_slot
     )
-    var spawn_position := Network.get_player_spawn_position(
+    var spawn_position: Vector3 = Network.get_player_spawn_position(
         planet,
         Network.local_spawn_slot
     )
 
     var planet_center := planet.to_global(planet.get_planet_center())
-    var spawn_direction := (spawn_position - planet_center).normalized()
+    var spawn_direction: Vector3 = (spawn_position - planet_center).normalized()
 
     global_position = spawn_position
     planet.update_streaming(global_position)
@@ -230,7 +230,7 @@ func _physics_process(delta: float) -> void:
     # Остаточная скорость при контакте с поверхностью не означает,
     # что игрок действительно движется. Для добычи учитываем ввод
     # направления и состояние опоры из предыдущего шага симуляции.
-    var is_moving := (
+    var is_moving: bool = (
         input.length_squared() > 0.01
         or not Network.local_grounded
     )
