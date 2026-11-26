@@ -60,6 +60,7 @@ mine={
 
 [physics]
 
+common/physics_ticks_per_second=60
 3d/physics_engine="Jolt Physics"
 jolt_physics_3d/limits/max_bodies=102400
 

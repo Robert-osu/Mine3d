@@ -34,6 +34,11 @@ var last_input_sequence: int = -1
 # Последний принятый от клиента инпут.
 var last_received_input_sequence: int = -1
 
+# Серверные тики: время последнего принятого ввода и окно ограничения RPC.
+var last_input_server_tick: int = 0
+var input_rate_window_start_tick: int = 0
+var input_rate_window_count: int = 0
+
 # Очередь входящих инпутов.
 var input_queue: Array[Dictionary] = []
 
@@ -74,13 +79,15 @@ func set_input(
     new_move_input: Vector2,
     new_look_direction: Vector3,
     new_buttons: int,
-    new_mine_requests: int
+    new_mine_requests: int,
+    server_tick: int
 ) -> void:
 
     if sequence <= last_received_input_sequence:
         return
 
     last_received_input_sequence = sequence
+    last_input_server_tick = server_tick
 
     input_queue.append({
         "sequence": sequence,

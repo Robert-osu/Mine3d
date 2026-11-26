@@ -67,8 +67,13 @@ var correction_offset: Vector3 = Vector3.ZERO
 # Ссылка на планету.
 var planet: Planet
 
-# Защита от неограниченного накопления надёжных input RPC.
-const MAX_SERVER_INPUT_QUEUE: int = 120
+# Фиксированный шаг сервера согласован с physics_ticks_per_second в project.godot.
+const SERVER_TICK_DELTA: float = 1.0 / 60.0
+const INPUT_TIMEOUT_TICKS: int = 30
+const MAX_SERVER_INPUT_QUEUE: int = 12
+const MAX_INPUT_SEQUENCE_GAP: int = 120
+const INPUT_RATE_WINDOW_TICKS: int = 60
+const MAX_INPUT_RPCS_PER_WINDOW: int = 90
 
 
 # ============================================================
@@ -184,7 +189,7 @@ func create_server_player(id: int) -> void:
 	)
 
 
-func _server_physics_process(delta: float) -> void:
+func _server_physics_process(_delta: float) -> void:
 	var current_planet := _get_planet()
 
 	if current_planet == null:
@@ -200,7 +205,7 @@ func _server_physics_process(delta: float) -> void:
 		_simulate_server_player(
 			server_player,
 			current_planet,
-			delta
+			SERVER_TICK_DELTA
 		)
 
 	# Отправляем состояния 20 раз в секунду.
@@ -220,6 +225,15 @@ func _simulate_server_player(
 	var input_frame: Dictionary = {}
 	if not server_player.input_queue.is_empty():
 		input_frame = server_player.take_next_input()
+
+	# При отсутствии новых пакетов не продолжаем бесконечно применять старое движение.
+	if (
+		input_frame.is_empty()
+		and server_physics_tick - server_player.last_input_server_tick
+			> INPUT_TIMEOUT_TICKS
+	):
+		server_player.move_input = Vector2.ZERO
+		server_player.buttons = 0
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
@@ -477,46 +491,49 @@ func submit_input(
 
 	var server_player: ServerPlayer = server_players[sender_id]
 
-	# Проверяем порядковый номер.
-	if sequence <= server_player.last_received_input_sequence:
+	# Частота RPC ограничивается серверными тиками, не временем клиента.
+	if not _allow_input_rpc(server_player):
+		_reject_input(sender_id, sequence, mine_requests)
 		return
 
-	if sequence < 0:
+	# Проверяем порядковый номер и чрезмерные скачки sequence.
+	if sequence < 0 or sequence <= server_player.last_received_input_sequence:
+		_reject_input(sender_id, sequence, mine_requests)
+		return
+
+	if (
+		server_player.last_received_input_sequence >= 0
+		and sequence - server_player.last_received_input_sequence
+			> MAX_INPUT_SEQUENCE_GAP
+	):
+		_reject_input(sender_id, sequence, mine_requests)
 		return
 
 	# Проверяем входные значения.
-	if move_input.length() > 1.01:
-		return
-
-	if look_direction.length_squared() < 0.0001:
-		return
-
-	if not _is_finite_vector2(move_input):
-		return
-
-	if not _is_finite_vector3(look_direction):
-		return
-
-	# Защита от некорректного количества событий добычи в одном input.
 	if mine_requests < 0 or mine_requests > 8:
+		_reject_input(sender_id, sequence, 0)
+		return
+
+	if (
+		not _is_finite_vector2(move_input)
+		or move_input.length() > 1.01
+		or not _is_finite_vector3(look_direction)
+		or look_direction.length_squared() < 0.0001
+	):
+		_reject_input(sender_id, sequence, mine_requests)
 		return
 
 	# Защита от некорректной маски кнопок.
 	var allowed_buttons := NetworkProtocol.Buttons.JUMP
 
 	if (buttons & ~allowed_buttons) != 0:
+		_reject_input(sender_id, sequence, mine_requests)
 		return
 
 	# Если очередь переполнена, явно отклоняем связанные с input удары,
 	# чтобы клиент мог отменить локальное предсказание.
 	if server_player.input_queue.size() >= MAX_SERVER_INPUT_QUEUE:
-		for request_index in range(mine_requests):
-			mining_result.rpc_id(
-				sender_id,
-				sequence,
-				request_index,
-				INVALID_MINED_CELL
-			)
+		_reject_input(sender_id, sequence, mine_requests)
 		return
 
 	server_player.set_input(
@@ -524,8 +541,61 @@ func submit_input(
 		move_input,
 		look_direction,
 		buttons,
-		mine_requests
+		mine_requests,
+		server_physics_tick
 	)
+
+
+func _allow_input_rpc(server_player: ServerPlayer) -> bool:
+	if (
+		server_physics_tick - server_player.input_rate_window_start_tick
+		>= INPUT_RATE_WINDOW_TICKS
+	):
+		server_player.input_rate_window_start_tick = server_physics_tick
+		server_player.input_rate_window_count = 0
+
+	server_player.input_rate_window_count += 1
+	return server_player.input_rate_window_count <= MAX_INPUT_RPCS_PER_WINDOW
+
+
+func _reject_input(sender_id: int, sequence: int, mine_requests: int) -> void:
+	if mine_requests >= 0 and mine_requests <= 8 and sequence >= 0:
+		for request_index in range(mine_requests):
+			mining_result.rpc_id(
+				sender_id,
+				sequence,
+				request_index,
+				INVALID_MINED_CELL
+			)
+
+	input_rejected.rpc_id(sender_id, sequence)
+
+
+@rpc("authority", "call_remote", "reliable", 0)
+func input_rejected(sequence: int) -> void:
+	if multiplayer.is_server():
+		return
+
+	var remaining_inputs: Array[Dictionary] = []
+	for frame in pending_inputs:
+		if int(frame["sequence"]) != sequence:
+			remaining_inputs.append(frame)
+	pending_inputs = remaining_inputs
+
+	var current_planet := _get_planet()
+	for prediction_key in pending_mining_predictions.keys():
+		if prediction_key.x != sequence:
+			continue
+
+		var prediction: Dictionary = pending_mining_predictions[prediction_key]
+		var cell: Vector3i = prediction.get("cell", INVALID_MINED_CELL)
+		if (
+			current_planet != null
+			and cell != INVALID_MINED_CELL
+			and not bool(prediction.get("confirmed", false))
+		):
+			current_planet.restore_block(cell)
+		pending_mining_predictions.erase(prediction_key)
 
 
 func _is_finite_vector2(value: Vector2) -> bool:
