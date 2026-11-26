@@ -323,17 +323,24 @@ func _physics_process(delta: float) -> void:
 
 
 func update_orientation(up: Vector3) -> void:
-    heading = heading.slide(up).normalized()
+    var surface_up := up.normalized()
+    heading = heading.slide(surface_up).normalized()
 
+    # Выбираем опорную ось, которая не параллельна нормали.
+    # Это также корректно работает около полюсов планеты.
     if heading.length_squared() < 0.001:
-        heading = Vector3.FORWARD.slide(up).normalized()
+        var fallback_axis := Vector3.UP
+        if absf(surface_up.dot(fallback_axis)) > 0.95:
+            fallback_axis = Vector3.FORWARD
+        heading = fallback_axis.slide(surface_up).normalized()
 
-    var right := heading.cross(up).normalized()
-    var backward := -heading
+    var right := heading.cross(surface_up).normalized()
+    var backward := right.cross(surface_up).normalized()
+    heading = -backward
 
     global_basis = Basis(
         right,
-        up,
+        surface_up,
         backward
     ).orthonormalized()
 

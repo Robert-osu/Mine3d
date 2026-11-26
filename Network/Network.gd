@@ -819,7 +819,7 @@ func receive_world_snapshot(
 			continue
 
 		# Остальных игроков добавляем в историю снимков.
-		_add_remote_snapshot(player_id, state)
+		_add_remote_snapshot(player_id, state, server_tick)
 
 	# Удаляем персонажей, которых больше нет на сервере.
 	for id in remote_players.keys():
@@ -1093,24 +1093,112 @@ func sync_player_list(players: Dictionary) -> void:
 
 func _add_remote_snapshot(
 	player_id: int,
-	state: Dictionary
+	state: Dictionary,
+	server_tick: int
 ) -> void:
 
 	_ensure_remote_player(player_id)
 
 	var history: Array = remote_snapshots.get(player_id, [])
 
+	# Не допускаем дубликаты и откат истории назад по серверному времени.
+	if not history.is_empty():
+		var latest_tick: int = int(history[-1]["server_tick"])
+		if server_tick <= latest_tick:
+			return
+
 	history.append({
-		"time": Time.get_ticks_msec() / 1000.0,
+		"server_tick": server_tick,
+		"received_at": Time.get_ticks_msec() / 1000.0,
 		"position": state["position"],
 		"velocity": state["velocity"],
 		"heading": state["heading"]
 	})
 
-	while history.size() > settings.max_remote_snapshots:
+	var history_limit: int = maxi(settings.max_remote_snapshots, 2)
+	while history.size() > history_limit:
 		history.pop_front()
 
 	remote_snapshots[player_id] = history
+
+
+func _transport_tangent_heading(
+	heading: Vector3,
+	from_up: Vector3,
+	to_up: Vector3
+) -> Vector3:
+	var source_up := from_up.normalized()
+	var target_up := to_up.normalized()
+	var tangent_heading := heading.slide(source_up).normalized()
+
+	if tangent_heading.length_squared() < 0.0001:
+		var fallback_axis := Vector3.UP
+		if absf(source_up.dot(fallback_axis)) > 0.95:
+			fallback_axis = Vector3.FORWARD
+		tangent_heading = fallback_axis.slide(source_up).normalized()
+
+	# Параллельно переносим направление кратчайшим поворотом между нормалями.
+	var transport_rotation := Quaternion(source_up, target_up)
+	var transported := (transport_rotation * tangent_heading).slide(target_up).normalized()
+
+	if transported.length_squared() < 0.0001:
+		var fallback_axis := Vector3.UP
+		if absf(target_up.dot(fallback_axis)) > 0.95:
+			fallback_axis = Vector3.FORWARD
+		transported = fallback_axis.slide(target_up).normalized()
+
+	return transported
+
+
+func _interpolate_spherical_position(
+	first_position: Vector3,
+	second_position: Vector3,
+	center: Vector3,
+	weight: float
+) -> Vector3:
+	var first_offset := first_position - center
+	var second_offset := second_position - center
+	var first_radius := first_offset.length()
+	var second_radius := second_offset.length()
+
+	if first_radius < 0.0001 or second_radius < 0.0001:
+		return first_position.lerp(second_position, weight)
+
+	var first_up := first_offset / first_radius
+	var second_up := second_offset / second_radius
+	var interpolated_up := first_up.slerp(second_up, weight).normalized()
+	var interpolated_radius := lerpf(first_radius, second_radius, weight)
+
+	return center + interpolated_up * interpolated_radius
+
+
+func _interpolate_tangent_heading(
+	first_heading: Vector3,
+	first_up: Vector3,
+	second_heading: Vector3,
+	second_up: Vector3,
+	target_up: Vector3,
+	weight: float
+) -> Vector3:
+	var first_transported := _transport_tangent_heading(
+		first_heading,
+		first_up,
+		target_up
+	)
+	var second_transported := _transport_tangent_heading(
+		second_heading,
+		second_up,
+		target_up
+	)
+
+	var angle := first_transported.signed_angle_to(
+		second_transported,
+		target_up
+	)
+	return first_transported.rotated(
+		target_up,
+		angle * weight
+	).slide(target_up).normalized()
 
 
 func _ensure_remote_player(peer_id: int) -> void:
@@ -1161,12 +1249,17 @@ func _remove_remote_player(player_id: int) -> void:
 
 	remote_snapshots.erase(player_id)
 
+# Максимальное время движения без свежего снимка.
+const MAX_REMOTE_EXTRAPOLATION: float = 0.12
+
+
 func _update_remote_players() -> void:
 	var now := Time.get_ticks_msec() / 1000.0
-	var render_time := now - settings.interpolation_delay
+	var interpolation_delay_ticks := (
+		settings.interpolation_delay / SERVER_TICK_DELTA
+	)
 
 	var center_planet := _get_planet()
-
 	if center_planet == null:
 		return
 
@@ -1179,53 +1272,96 @@ func _update_remote_players() -> void:
 			continue
 
 		var remote_player: CharacterBody3D = remote_players[player_id]
-
 		if not is_instance_valid(remote_player):
 			continue
 
 		var history: Array = remote_snapshots[player_id]
-
 		if history.is_empty():
 			continue
 
-		# Удаляем старые снимки, оставляя два необходимых.
+		var latest: Dictionary = history[-1]
+		var latest_tick: int = int(latest["server_tick"])
+		var latest_received_at: float = float(latest["received_at"])
+
+		# Оцениваем текущий серверный тик по времени, прошедшему
+		# с получения последнего снимка. Часы клиента и сервера
+		# не сравниваются напрямую.
+		var estimated_server_tick := (
+			float(latest_tick)
+			+ maxf(now - latest_received_at, 0.0) / SERVER_TICK_DELTA
+		)
+		var render_tick := estimated_server_tick - interpolation_delay_ticks
+
+		# Оставляем снимок до render_tick и следующий за ним.
 		while history.size() > 2:
-			if history[1]["time"] <= render_time:
+			if float(history[1]["server_tick"]) <= render_tick:
 				history.pop_front()
 			else:
 				break
 
 		var first: Dictionary = history[0]
-		var second: Dictionary = history[-1]
+		var first_tick: float = float(first["server_tick"])
+		var second_tick: float = float(history[-1]["server_tick"])
 
-		var first_time: float = first["time"]
-		var second_time: float = second["time"]
+		var position: Vector3
+		var heading: Vector3
+		var up: Vector3
 
-		var weight := 0.0
+		if render_tick > second_tick:
+			# Нет снимка для целевого тика: кратковременно прогнозируем
+			# положение по последней серверной скорости.
+			var extrapolation_time := minf(
+				(render_tick - second_tick) * SERVER_TICK_DELTA,
+				MAX_REMOTE_EXTRAPOLATION
+			)
+			var latest_position: Vector3 = latest["position"]
+			var latest_velocity: Vector3 = latest["velocity"]
+			position = latest_position + latest_velocity * extrapolation_time
+			up = (position - center).normalized()
 
-		if second_time > first_time:
-			weight = clampf(
-				(render_time - first_time) / (second_time - first_time),
-				0.0,
-				1.0
+			var latest_up := (latest_position - center).normalized()
+			heading = _transport_tangent_heading(
+				latest["heading"],
+				latest_up,
+				up
+			)
+		else:
+			var second: Dictionary = history[-1]
+			var weight := 0.0
+
+			if second_tick > first_tick:
+				weight = clampf(
+					(render_tick - first_tick) / (second_tick - first_tick),
+					0.0,
+					1.0
+				)
+
+			position = _interpolate_spherical_position(
+				first["position"],
+				second["position"],
+				center,
+				weight
+			)
+			up = (position - center).normalized()
+
+			var first_up := (first["position"] - center).normalized()
+			var second_up := (second["position"] - center).normalized()
+			heading = _interpolate_tangent_heading(
+				first["heading"],
+				first_up,
+				second["heading"],
+				second_up,
+				up,
+				weight
 			)
 
-		var position: Vector3 = first["position"].lerp(
-			second["position"],
-			weight
-		)
-
-		var heading: Vector3 = first["heading"].slerp(
-			second["heading"],
-			weight
-		).normalized()
-
-		var up := (position - center).normalized()
-
-		# Применяем положение и ориентацию.
+		# Обновляем базис каждый кадр из нормали и касательного heading.
+		# update_orientation сам ортонормализует итоговую ориентацию.
 		remote_player.global_position = position
+		remote_player.up_direction = up
 		remote_player.set("heading", heading)
 		remote_player.call("update_orientation", up)
+
 
 @rpc("authority", "call_remote", "reliable")
 func receive_block_destroyed(cell: Vector3i) -> void:
