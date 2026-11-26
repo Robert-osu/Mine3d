@@ -37,7 +37,7 @@ static func is_capsule_blocked(
 ) -> bool:
 
     var started_usec: int = Time.get_ticks_usec()
-    var tested_cells: int = 0
+    var tested_cells: Array[int] = [0]
 
     if planet == null:
         return false
@@ -114,7 +114,7 @@ static func is_capsule_blocked(
 
     planet.record_collision_diagnostic(
         diagnostic_phase,
-        tested_cells,
+        tested_cells[0],
         Time.get_ticks_usec() - started_usec
     )
     return false
@@ -589,7 +589,7 @@ static func has_capsule_support(
             if supported_samples >= required_samples:
                 planet.record_collision_diagnostic(
                     diagnostic_phase,
-                    tested_cells,
+                    tested_cells[0],
                     Time.get_ticks_usec() - started_usec
                 )
                 return true
@@ -613,7 +613,7 @@ static func _support_ray_hits_open_face(
     ray_length: float,
     ray_step: float,
     solid_cache: Variant,
-    tested_cells: int
+    tested_cells: Array[int]
 ) -> bool:
 
     var ray_direction: Vector3 = -local_up
@@ -630,7 +630,7 @@ static func _support_ray_hits_open_face(
 
         if not visited_cells.has(cell):
             visited_cells[cell] = true
-            tested_cells += 1
+            tested_cells[0] += 1
 
             if _is_solid_cached(
                 planet, cell.x, cell.y, cell.z, solid_cache
@@ -683,7 +683,7 @@ static func _support_ray_hits_open_face(
                         continue
 
                     var neighbour: Vector3i = cell + face_step
-                    tested_cells += 1
+                    tested_cells[0] += 1
                     if not _is_solid_cached(
                         planet,
                         neighbour.x,
