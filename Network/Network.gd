@@ -71,7 +71,6 @@ var planet: Planet
 
 # Фиксированный шаг сервера согласован с physics_ticks_per_second в project.godot.
 const SERVER_TICK_DELTA: float = 1.0 / 60.0
-const MINING_MOVE_INPUT_THRESHOLD_SQUARED: float = 0.05
 const INPUT_TIMEOUT_TICKS: int = 30
 const MAX_SERVER_INPUT_QUEUE: int = 12
 const MAX_INPUT_SEQUENCE_GAP: int = 120
@@ -560,7 +559,7 @@ func process_local_player(
 		var predicted_cell := INVALID_MINED_CELL
 
 		if (
-			move_input.length_squared() <= MINING_MOVE_INPUT_THRESHOLD_SQUARED
+			move_input.length_squared() <= 0.05
 			and bool(result["grounded"])
 		):
 			var center := current_planet.to_global(
@@ -975,12 +974,16 @@ func _simulate_movement(
 			settings.acceleration * delta
 		)
 
-	# Проверяем опору по всем контактам под капсулой.
-	# Один наиболее глубокий контакт может оказаться боковым на ребре блока.
-	var grounded := VoxelCollision.has_capsule_support(
+	# Проверяем контакт с поверхностью.
+	var ground_collision := VoxelCollision.get_capsule_collision(
 		current_planet,
 		current_position - up * 0.08,
 		up
+	)
+
+	var grounded := (
+		ground_collision.collided
+		and ground_collision.normal.dot(up) > 0.5
 	)
 
 	# Проверяем нажатие прыжка.
@@ -989,9 +992,7 @@ func _simulate_movement(
 		and (previous_buttons & NetworkProtocol.Buttons.JUMP) == 0
 	)
 
-	var jumped := jump_pressed and grounded
-
-	if jumped:
+	if jump_pressed and grounded:
 		vertical_speed = settings.jump_force
 		grounded = false
 	elif grounded and vertical_speed < 0.0:
@@ -1044,20 +1045,8 @@ func _simulate_movement(
 		if velocity_into_wall < 0.0:
 			new_velocity = new_velocity.slide(collision.normal)
 
-	# Повторно проверяем опору уже после перемещения.
-	# Это не позволяет добывать блоки в кадре, когда персонаж сошёл с края.
+	# Определяем новое направление относительно поверхности.
 	var new_up := (new_position - center).normalized()
-	if jumped:
-		grounded = false
-	else:
-		grounded = VoxelCollision.has_capsule_support(
-			current_planet,
-			new_position - new_up * 0.08,
-			new_up
-		)
-
-		if grounded and new_velocity.dot(new_up) < 0.0:
-			new_velocity = new_velocity.slide(new_up)
 
 	var new_heading := forward.slide(new_up).normalized()
 
@@ -1501,7 +1490,7 @@ func _server_mine_block(
 
 	# Запрещаем добычу при активном движении по поверхности
 	# и в воздухе. Остаточная скорость при опоре не блокирует удар.
-	if server_player.move_input.length_squared() > MINING_MOVE_INPUT_THRESHOLD_SQUARED:
+	if server_player.move_input.length_squared() > 0.05:
 		return INVALID_MINED_CELL
 
 	if not server_player.grounded:

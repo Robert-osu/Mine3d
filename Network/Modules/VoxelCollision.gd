@@ -422,76 +422,76 @@ static func get_capsule_collision(
 # Учитываются все блоки в области капсулы; достаточно любого контакта,
 # нормаль которого направлена преимущественно против силы тяжести.
 static func has_capsule_support(
-	planet: Planet,
-	world_position: Vector3,
-	world_up: Vector3
+    planet: Planet,
+    world_position: Vector3,
+    world_up: Vector3
 ) -> bool:
 
-	if planet == null:
-		return false
+    if planet == null:
+        return false
 
-	var up := world_up.normalized()
-	var local_position := planet.to_local(world_position)
-	var local_up := (
-		planet.global_transform.basis.inverse() * up
-	).normalized()
+    var up: Vector3 = world_up.normalized()
+    var local_position: Vector3 = planet.to_local(world_position)
+    var local_up: Vector3 = (
+        planet.global_transform.basis.inverse() * up
+    ).normalized()
 
-	var half_segment := COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
-	var point_a := local_position - local_up * half_segment
-	var point_b := local_position + local_up * half_segment
-	var margin := Vector3.ONE * COLLISION_RADIUS
+    var half_segment: float = COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
+    var point_a: Vector3 = local_position - local_up * half_segment
+    var point_b: Vector3 = local_position + local_up * half_segment
+    var margin: Vector3 = Vector3.ONE * COLLISION_RADIUS
 
-	var bounds_min := Vector3(
-		minf(point_a.x, point_b.x),
-		minf(point_a.y, point_b.y),
-		minf(point_a.z, point_b.z)
-	) - margin
+    var bounds_min: Vector3 = Vector3(
+        minf(point_a.x, point_b.x),
+        minf(point_a.y, point_b.y),
+        minf(point_a.z, point_b.z)
+    ) - margin
 
-	var bounds_max := Vector3(
-		maxf(point_a.x, point_b.x),
-		maxf(point_a.y, point_b.y),
-		maxf(point_a.z, point_b.z)
-	) + margin
+    var bounds_max: Vector3 = Vector3(
+        maxf(point_a.x, point_b.x),
+        maxf(point_a.y, point_b.y),
+        maxf(point_a.z, point_b.z)
+    ) + margin
 
-	var min_cell := Vector3i(
-		floori(bounds_min.x / planet.BLOCK_SIZE),
-		floori(bounds_min.y / planet.BLOCK_SIZE),
-		floori(bounds_min.z / planet.BLOCK_SIZE)
-	)
+    var min_cell: Vector3i = Vector3i(
+        floori(bounds_min.x / planet.BLOCK_SIZE),
+        floori(bounds_min.y / planet.BLOCK_SIZE),
+        floori(bounds_min.z / planet.BLOCK_SIZE)
+    )
 
-	var max_cell := Vector3i(
-		floori(bounds_max.x / planet.BLOCK_SIZE),
-		floori(bounds_max.y / planet.BLOCK_SIZE),
-		floori(bounds_max.z / planet.BLOCK_SIZE)
-	)
+    var max_cell: Vector3i = Vector3i(
+        floori(bounds_max.x / planet.BLOCK_SIZE),
+        floori(bounds_max.y / planet.BLOCK_SIZE),
+        floori(bounds_max.z / planet.BLOCK_SIZE)
+    )
 
-	for x in range(min_cell.x, max_cell.x + 1):
-		for y in range(min_cell.y, max_cell.y + 1):
-			for z in range(min_cell.z, max_cell.z + 1):
-				if not planet.is_solid(x, y, z):
-					continue
+    for x in range(min_cell.x, max_cell.x + 1):
+        for y in range(min_cell.y, max_cell.y + 1):
+            for z in range(min_cell.z, max_cell.z + 1):
+                if not planet.is_solid(x, y, z):
+                    continue
 
-				var box_min := Vector3(x, y, z) * planet.BLOCK_SIZE
-				var box_max := box_min + Vector3.ONE * planet.BLOCK_SIZE
-				var contact := _get_segment_box_contact(
-					point_a,
-					point_b,
-					box_min,
-					box_max,
-					COLLISION_RADIUS
-				)
+                var box_min: Vector3 = Vector3(x, y, z) * planet.BLOCK_SIZE
+                var box_max: Vector3 = box_min + Vector3.ONE * planet.BLOCK_SIZE
+                var contact: ContactResult = _get_segment_box_contact(
+                    point_a,
+                    point_b,
+                    box_min,
+                    box_max,
+                    COLLISION_RADIUS
+                )
 
-				if contact.penetration <= 0.0:
-					continue
+                if contact.penetration <= 0.0:
+                    continue
 
-				var world_normal := (
-					planet.global_transform.basis * contact.normal
-				).normalized()
+                var world_normal: Vector3 = (
+                    planet.global_transform.basis * contact.normal
+                ).normalized()
 
-				if world_normal.dot(up) > 0.5:
-					return true
+                if world_normal.dot(up) > 0.5:
+                    return true
 
-	return false
+    return false
 
 
 static func _get_segment_box_contact(
