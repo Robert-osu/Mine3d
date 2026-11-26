@@ -87,10 +87,6 @@ func submit_input(
 		buttons
 	)
 
-	# Не засоряем консоль каждым пакетом.
-	if sequence % 60 == 0:
-
-
 
 func broadcast_player_list() -> void:
 	if not multiplayer.is_server():
