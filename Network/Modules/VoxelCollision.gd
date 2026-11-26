@@ -134,10 +134,21 @@ static func move_capsule(
             initial_up
         )
 
-    # Ограничиваем размер одного шага.
+    # Ограничиваем размер шага и общее число шагов.
+    # Это защищает от аномально большого перемещения за один вызов.
+    const MAX_MOVE_STEPS: int = 16
     var max_step := COLLISION_RADIUS * 0.5
+    var max_distance := max_step * MAX_MOVE_STEPS
     var distance := displacement.length()
-    var steps := maxi(1, ceili(distance / max_step))
+
+    if distance > max_distance:
+        displacement = displacement * (max_distance / distance)
+        distance = max_distance
+
+    var steps := mini(
+        MAX_MOVE_STEPS,
+        maxi(1, ceili(distance / max_step))
+    )
 
     var step_vector := displacement / float(steps)
 

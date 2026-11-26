@@ -77,6 +77,11 @@ const MAX_INPUT_SEQUENCE_GAP: int = 120
 const INPUT_RATE_WINDOW_TICKS: int = 60
 const MAX_INPUT_RPCS_PER_WINDOW: int = 90
 
+# Защита от неограниченного ускорения падения и дорогого replay.
+const MAX_FALL_SPEED: float = 30.0
+const MAX_RECONCILIATION_REPLAY_INPUTS: int = 12
+const MAX_PENDING_INPUTS: int = 240
+
 # Диагностика узкого места при добыче. Счётчики сбрасываются раз в секунду.
 const DIAGNOSTICS_INTERVAL: float = 1.0
 var diagnostics_elapsed: float = 0.0
@@ -402,6 +407,7 @@ func create_server_player(id: int) -> void:
 	)
 
 	var server_player := ServerPlayer.new(id, spawn_position)
+	server_player.last_input_server_tick = server_physics_tick
 
 	server_players[id] = server_player
 
@@ -462,8 +468,14 @@ func _simulate_server_player(
 		and server_physics_tick - server_player.last_input_server_tick
 			> INPUT_TIMEOUT_TICKS
 	):
+		# Клиент пропал или перестал присылать вводы.
+		# Не продолжаем бесконечно ронять его персонажа под действием гравитации.
 		server_player.move_input = Vector2.ZERO
 		server_player.buttons = 0
+		server_player.previous_buttons = 0
+		server_player.velocity = Vector3.ZERO
+		server_player.input_queue.clear()
+		return
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var movement_started_usec: int = Time.get_ticks_usec()
@@ -664,6 +676,8 @@ func process_local_player(
 
 	# Сохраняем ввод до подтверждения сервером.
 	pending_inputs.append(frame)
+	if pending_inputs.size() > MAX_PENDING_INPUTS:
+		pending_inputs.pop_front()
 	diag_client_pending_inputs_max = maxi(diag_client_pending_inputs_max, pending_inputs.size())
 	diag_client_frames += 1
 
@@ -1015,8 +1029,15 @@ func _reconcile_player(
 
 	var previous_buttons := acknowledged_buttons
 
-	# Повторно проигрываем вводы, которые сервер ещё не подтвердил.
-	for frame in pending_inputs:
+	# Повторно проигрываем только последние вводы, которые сервер ещё
+	# не подтвердил. При сильном отставании это ограничивает стоимость
+	# reconciliation; сами вводы остаются в очереди до подтверждения.
+	var replay_start := maxi(
+		0,
+		pending_inputs.size() - MAX_RECONCILIATION_REPLAY_INPUTS
+	)
+	for replay_index in range(replay_start, pending_inputs.size()):
+		var frame: Dictionary = pending_inputs[replay_index]
 		var result := _simulate_movement(
 			current_planet,
 			corrected_position,
@@ -1148,7 +1169,10 @@ func _simulate_movement(
 	elif grounded and vertical_speed < 0.0:
 		vertical_speed = 0.0
 	else:
-		vertical_speed -= settings.gravity * delta
+		vertical_speed = maxf(
+			vertical_speed - settings.gravity * delta,
+			-MAX_FALL_SPEED
+		)
 
 	var new_velocity := (
 		horizontal_velocity
