@@ -14,45 +14,45 @@ var diag_section_queue_max: int = 0
 
 
 func record_collision_diagnostic(cells_checked: int, elapsed_usec: int) -> void:
-	diag_collision_calls += 1
-	diag_collision_cells += cells_checked
-	diag_collision_max_usec = maxi(diag_collision_max_usec, elapsed_usec)
+    diag_collision_calls += 1
+    diag_collision_cells += cells_checked
+    diag_collision_max_usec = maxi(diag_collision_max_usec, elapsed_usec)
 
 
 func _record_mining_ray_diagnostic(steps: int) -> void:
-	diag_ray_calls += 1
-	diag_ray_steps += steps
-	diag_ray_max_steps = maxi(diag_ray_max_steps, steps)
+    diag_ray_calls += 1
+    diag_ray_steps += steps
+    diag_ray_max_steps = maxi(diag_ray_max_steps, steps)
 
 
 func _record_destroy_diagnostic(elapsed_usec: int) -> void:
-	diag_destroy_calls += 1
-	diag_destroy_max_usec = maxi(diag_destroy_max_usec, elapsed_usec)
+    diag_destroy_calls += 1
+    diag_destroy_max_usec = maxi(diag_destroy_max_usec, elapsed_usec)
 
 
 func consume_mining_debug_stats() -> Dictionary:
-	var result := {
-		"collision_calls": diag_collision_calls,
-		"collision_cells": diag_collision_cells,
-		"collision_max_usec": diag_collision_max_usec,
-		"ray_calls": diag_ray_calls,
-		"ray_steps": diag_ray_steps,
-		"ray_max_steps": diag_ray_max_steps,
-		"destroy_calls": diag_destroy_calls,
-		"destroy_max_usec": diag_destroy_max_usec,
-		"section_queue_max": diag_section_queue_max
-	}
+    var result := {
+        "collision_calls": diag_collision_calls,
+        "collision_cells": diag_collision_cells,
+        "collision_max_usec": diag_collision_max_usec,
+        "ray_calls": diag_ray_calls,
+        "ray_steps": diag_ray_steps,
+        "ray_max_steps": diag_ray_max_steps,
+        "destroy_calls": diag_destroy_calls,
+        "destroy_max_usec": diag_destroy_max_usec,
+        "section_queue_max": diag_section_queue_max
+    }
 
-	diag_collision_calls = 0
-	diag_collision_cells = 0
-	diag_collision_max_usec = 0
-	diag_ray_calls = 0
-	diag_ray_steps = 0
-	diag_ray_max_steps = 0
-	diag_destroy_calls = 0
-	diag_destroy_max_usec = 0
-	diag_section_queue_max = section_queue.size()
-	return result
+    diag_collision_calls = 0
+    diag_collision_cells = 0
+    diag_collision_max_usec = 0
+    diag_ray_calls = 0
+    diag_ray_steps = 0
+    diag_ray_max_steps = 0
+    diag_destroy_calls = 0
+    diag_destroy_max_usec = 0
+    diag_section_queue_max = section_queue.size()
+    return result
 
 
 
