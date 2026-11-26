@@ -307,12 +307,7 @@ func _ready() -> void:
     terrain_material.roughness = 1.0
     terrain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-    print(
-        "Planet initialized. Size: ",
-        SIZE,
-        " Radius: ",
-        RADIUS
-    )
+    	print("PLANET READY | SIZE: ", SIZE, " | RADIUS: ", RADIUS)
 
 
 func _process(_delta: float) -> void:
@@ -1930,15 +1925,6 @@ func configure_world(
         -999999
     )
 
-    print(
-        "WORLD CONFIG APPLIED | SCALE: ",
-        world_scale,
-        " | SIZE: ",
-        SIZE,
-        " | RADIUS: ",
-        RADIUS
-    )
-
-    return true
+        return true
 
 
