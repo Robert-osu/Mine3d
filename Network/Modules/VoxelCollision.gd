@@ -343,6 +343,8 @@ static func get_capsule_collision(
     world_up: Vector3
 ) -> CollisionResult:
 
+    var started_usec: int = Time.get_ticks_usec()
+    var tested_cells: int = 0
     var result := CollisionResult.new()
 
     if planet == null:
@@ -417,6 +419,10 @@ static func get_capsule_collision(
         ).normalized()
         result.penetration = best_penetration
 
+    planet.record_collision_diagnostic(
+        tested_cells,
+        Time.get_ticks_usec() - started_usec
+    )
     return result
 
 # Проверяет опору независимо от того, какой контакт оказался самым глубоким.
