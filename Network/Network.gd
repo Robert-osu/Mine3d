@@ -1096,6 +1096,10 @@ func _simulate_movement(
 			settings.acceleration * delta
 		)
 
+	# Общий кэш действует только в рамках этой симуляции одного тика.
+	# Проверки опоры и столкновений повторно используют уже прочитанные клетки.
+	var solid_cache: Dictionary = {}
+
 	# Проверяем опору по всем контактам капсулы.
 	# Самый глубокий контакт может оказаться боковой гранью блока,
 	# даже если другая часть капсулы уже опирается на поверхность.
@@ -1103,7 +1107,8 @@ func _simulate_movement(
 		current_planet,
 		current_position - up * 0.08,
 		up,
-		&"support_before_move"
+		&"support_before_move",
+		solid_cache
 	)
 
 	# Проверяем нажатие прыжка.
@@ -1132,7 +1137,8 @@ func _simulate_movement(
 	var new_position := VoxelCollision.move_capsule(
 		current_planet,
 		current_position,
-		new_velocity * delta
+		new_velocity * delta,
+		solid_cache
 	)
 
 	# Проверяем столкновение после перемещения.
@@ -1140,7 +1146,8 @@ func _simulate_movement(
 		current_planet,
 		new_position,
 		up,
-		&"movement_final"
+		&"movement_final",
+		solid_cache
 	)
 
 	# Если капсула уже выталкивается из стены,
@@ -1160,7 +1167,8 @@ func _simulate_movement(
 			current_planet,
 			probe_position,
 			probe_up,
-			&"movement_probe"
+			&"movement_probe",
+			solid_cache
 		)
 
 	# Убираем скорость, направленную внутрь препятствия.
@@ -1178,7 +1186,8 @@ func _simulate_movement(
 		current_planet,
 		new_position - new_up * 0.08,
 		new_up,
-		&"support_after_move"
+		&"support_after_move",
+		solid_cache
 	)
 
 	if grounded:
