@@ -219,21 +219,6 @@ func _physics_process(delta: float) -> void:
     if mining_requested:
         mining_requested = false
 
-        var is_moving := (
-            input.length_squared() > 0.01
-            or velocity.length_squared() > 0.01
-        )
-
-        if is_moving:
-            return
-
-        print(
-            "CLIENT MINE | POSITION: ",
-            global_position,
-            " | LOOK: ",
-            -camera.global_basis.z
-        )
-
         mine_block()
 
 func update_orientation(up: Vector3) -> void:
