@@ -210,9 +210,12 @@ func _physics_process(delta: float) -> void:
     var mine_requests_this_tick := pending_mining_requests
     pending_mining_requests = 0
 
+    # Остаточная скорость при контакте с поверхностью не означает,
+    # что игрок действительно движется. Для добычи учитываем ввод
+    # направления и состояние опоры из предыдущего шага симуляции.
     var is_moving := (
         input.length_squared() > 0.01
-        or velocity.length_squared() > 0.01
+        or not Network.local_grounded
     )
 
     if is_moving:
