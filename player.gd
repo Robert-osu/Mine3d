@@ -133,50 +133,7 @@ func _log_spawn_diagnostics(
     )
     var surface_visible: bool = planet.is_block_visible(surface_cell)
 
-    print("========== PLAYER SPAWN DIAGNOSTICS ==========")
-    print("Spawn position: ", spawn_position)
-    print("Surface point: ", surface_point)
-    print("Spawn cell: ", spawn_cell)
-    print("Surface cell: ", surface_cell)
-    print(
-        "Surface block | SOLID: ",
-        surface_solid,
-        " | VISIBLE: ",
-        surface_visible,
-        " | COLLISION CHECK: ",
-        planet.has_collision_at(surface_point)
-    )
-    print(
-        "Target chunk: ",
-        chunk_key,
-        " | EXISTS: ",
-        chunk_exists,
-        " | GENERATED: ",
-        generated,
-        " | REQUEST ID: ",
-        chunk_data.get("request_id", -1),
-        " | ACTIVE REQUEST: ",
-        planet.active_chunk_requests.get(chunk_key, -1),
-        " | QUEUE INDEX: ",
-        planet.chunk_queue.find(chunk_key)
-    )
-    print(
-        "Target chunk pending sections: ",
-        pending_section_keys.size(),
-        " | BUILD CURSOR: ",
-        chunk_data.get("section_build_cursor", -1)
-    )
-    print(
-        "Streaming totals | LOADED CHUNKS: ",
-        planet.chunks.size(),
-        " | CHUNK QUEUE: ",
-        planet.chunk_queue.size(),
-        " | ACTIVE CHUNK REQUESTS: ",
-        planet.active_chunk_requests.size(),
-        " | WORKER TASKS: ",
-        planet.worker_task_ids.size()
-    )
-    print("===============================================")
+
 
 
 func _notification(what: int) -> void:
