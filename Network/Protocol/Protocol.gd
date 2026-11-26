@@ -3,7 +3,7 @@ class_name NetworkProtocol
 
 # Здесь будут общие параметры протокола.
 
-const VERSION := 2
+const VERSION := 3
 const WORLD_SYNC_SECTIONS_PER_BATCH := 8
 const MAX_PLAYER_NAME_LENGTH := 24
 
