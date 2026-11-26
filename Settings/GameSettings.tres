@@ -1,7 +1,57 @@
-[gd_resource type="Resource" script_class="GameSettings" format=3 uid="uid://c6rgimvfeksvj"]
+[gd_resource type="Resource" script_class="GameSettings" load_steps=2 format=3 uid="uid://c6rgimvfeksvj"]
 
 [ext_resource type="Script" uid="uid://cwprudio06a64" path="res://Scripts/GameSettings.gd" id="1_ag3qi"]
 
 [resource]
 script = ExtResource("1_ag3qi")
 metadata/_custom_type_script = "uid://cwprudio06a64"
+
+; Planet
+planet_scale = 1000
+terrain_color = Color(0.545098, 0.462745, 0.368627, 1)
+
+; Chunks
+load_radius = 8
+air_chunks_above = 4
+unload_radius = 3
+blocks_per_frame = 512
+sections_per_frame = 8
+
+; Chunk generation
+max_parallel_chunks = 2
+max_chunks_per_frame = 1
+max_parallel_section_jobs = 2
+max_section_jobs_per_frame = 2
+
+; Player movement and mining
+move_speed = 10.0
+acceleration = 20.0
+gravity = 18.0
+jump_force = 10.5
+mining_distance = 10.0
+
+; Collision
+collision_radius = 0.35
+collision_height = 1.4
+
+; Camera
+mouse_sensitivity = 0.003
+min_pitch = -89.0
+max_pitch = 89.0
+camera_height = 0.8
+
+; Flashlight
+flashlight_range = 24.0
+flashlight_angle = 55.0
+flashlight_energy = 7.0
+
+; Network
+port = 7777
+max_clients = 100
+snapshot_interval = 3
+
+; Network smoothing
+reconciliation_epsilon = 0.02
+correction_smoothing = 12.0
+interpolation_delay = 0.1
+max_remote_snapshots = 8
