@@ -37,7 +37,7 @@ static func is_capsule_blocked(
 ) -> bool:
 
     var started_usec: int = Time.get_ticks_usec()
-    var tested_cells: Array[int] = [0]
+    var tested_cells: int = 0
 
     if planet == null:
         return false
@@ -114,7 +114,7 @@ static func is_capsule_blocked(
 
     planet.record_collision_diagnostic(
         diagnostic_phase,
-        tested_cells[0],
+        tested_cells,
         Time.get_ticks_usec() - started_usec
     )
     return false
@@ -510,7 +510,7 @@ static func has_capsule_support(
 ) -> bool:
 
     var started_usec: int = Time.get_ticks_usec()
-    var tested_cells: int = 0
+    var tested_cells: Array[int] = [0]
 
     if planet == null:
         return false
@@ -596,7 +596,7 @@ static func has_capsule_support(
 
     planet.record_collision_diagnostic(
         diagnostic_phase,
-        tested_cells,
+        tested_cells[0],
         Time.get_ticks_usec() - started_usec
     )
     return false
