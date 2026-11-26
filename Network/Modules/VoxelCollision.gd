@@ -13,6 +13,10 @@ const COLLISION_RADIUS: float = 0.35
 const COLLISION_HEIGHT: float = 1.4
 const MAX_MOVE_STEPS: int = 16
 const BINARY_SEARCH_ITERATIONS: int = 4
+const SUPPORT_SAMPLE_COUNT: int = 13
+const SUPPORT_REQUIRED_SAMPLES: int = 7
+const SUPPORT_PROBE_DEPTH: float = 0.08
+const SUPPORT_FACE_TOLERANCE: float = 0.12
 
 class CollisionResult:
     var collided: bool = false
@@ -501,7 +505,8 @@ static func has_capsule_support(
     planet: Planet,
     world_position: Vector3,
     world_up: Vector3,
-    diagnostic_phase: StringName = &"support_other"
+    diagnostic_phase: StringName = &"support_other",
+    solid_cache: Variant = null
 ) -> bool:
 
     var started_usec: int = Time.get_ticks_usec()
@@ -511,75 +516,112 @@ static func has_capsule_support(
         return false
 
     var up: Vector3 = world_up.normalized()
-    var local_position: Vector3 = planet.to_local(world_position)
+    if up.length_squared() < 0.0001:
+        return false
+
     var local_up: Vector3 = (
         planet.global_transform.basis.inverse() * up
     ).normalized()
 
-    # Для проверки опоры достаточно нижней части капсулы.
-    # Полный отрезок проверяет также область туловища и головы,
-    # хотя опорой может быть только контакт под ногами.
-    var half_segment: float = COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
-    var point_a: Vector3 = local_position - local_up * half_segment
-    var point_b: Vector3 = point_a + local_up * COLLISION_RADIUS
-    var margin: Vector3 = Vector3.ONE * COLLISION_RADIUS
-
-    var bounds_min: Vector3 = Vector3(
-        minf(point_a.x, point_b.x),
-        minf(point_a.y, point_b.y),
-        minf(point_a.z, point_b.z)
-    ) - margin
-
-    var bounds_max: Vector3 = Vector3(
-        maxf(point_a.x, point_b.x),
-        maxf(point_a.y, point_b.y),
-        maxf(point_a.z, point_b.z)
-    ) + margin
-
-    var min_cell: Vector3i = Vector3i(
-        floori(bounds_min.x / planet.BLOCK_SIZE),
-        floori(bounds_min.y / planet.BLOCK_SIZE),
-        floori(bounds_min.z / planet.BLOCK_SIZE)
+    # Оцениваем опору по площади под ногами, а не по одному контакту.
+    # 13 равномерно распределённых проб: центр и 12 точек кольца.
+    # Не менее 7 из 13 точек должны иметь открытую верхнюю грань блока.
+    var foot_center: Vector3 = (
+        world_position - up * (COLLISION_HEIGHT * 0.5)
     )
 
-    var max_cell: Vector3i = Vector3i(
-        floori(bounds_max.x / planet.BLOCK_SIZE),
-        floori(bounds_max.y / planet.BLOCK_SIZE),
-        floori(bounds_max.z / planet.BLOCK_SIZE)
-    )
+    var reference_axis: Vector3 = Vector3.UP
+    if absf(up.dot(reference_axis)) > 0.95:
+        reference_axis = Vector3.RIGHT
 
-    for x in range(min_cell.x, max_cell.x + 1):
-        for y in range(min_cell.y, max_cell.y + 1):
-            for z in range(min_cell.z, max_cell.z + 1):
-                tested_cells += 1
+    var tangent_right: Vector3 = up.cross(reference_axis).normalized()
+    var tangent_forward: Vector3 = tangent_right.cross(up).normalized()
 
-                if not planet.is_solid(x, y, z):
-                    continue
+    var dominant_axis: int = 0
+    if absf(local_up.y) > absf(local_up.x):
+        dominant_axis = 1
+    if absf(local_up.z) > absf(local_up[dominant_axis]):
+        dominant_axis = 2
 
-                var box_min: Vector3 = Vector3(x, y, z) * planet.BLOCK_SIZE
-                var box_max: Vector3 = box_min + Vector3.ONE * planet.BLOCK_SIZE
-                var contact: ContactResult = _get_segment_box_contact(
-                    point_a,
-                    point_b,
-                    box_min,
-                    box_max,
-                    COLLISION_RADIUS
-                )
+    var face_step := Vector3i.ZERO
+    var face_direction: int = 1 if local_up[dominant_axis] >= 0.0 else -1
+    if dominant_axis == 0:
+        face_step.x = face_direction
+    elif dominant_axis == 1:
+        face_step.y = face_direction
+    else:
+        face_step.z = face_direction
 
-                if contact.penetration <= 0.0:
-                    continue
+    var face_alignment: float = absf(local_up[dominant_axis])
+    var supported_samples: int = 0
 
-                var world_normal: Vector3 = (
-                    planet.global_transform.basis * contact.normal
-                ).normalized()
+    for sample_index in range(SUPPORT_SAMPLE_COUNT):
+        var offset := Vector2.ZERO
+        if sample_index > 0:
+            var angle: float = (
+                TAU * float(sample_index - 1) / float(SUPPORT_SAMPLE_COUNT - 1)
+            )
+            offset = Vector2(cos(angle), sin(angle)) * (COLLISION_RADIUS * 0.8)
 
-                if world_normal.dot(up) > 0.5:
-                    planet.record_collision_diagnostic(
-                        diagnostic_phase,
-                        tested_cells,
-                        Time.get_ticks_usec() - started_usec
-                    )
-                    return true
+        var sample_world: Vector3 = (
+            foot_center
+            + tangent_right * offset.x
+            + tangent_forward * offset.y
+        )
+        var probe_local: Vector3 = planet.to_local(
+            sample_world - up * SUPPORT_PROBE_DEPTH
+        )
+
+        var cell := Vector3i(
+            floori(probe_local.x / planet.BLOCK_SIZE),
+            floori(probe_local.y / planet.BLOCK_SIZE),
+            floori(probe_local.z / planet.BLOCK_SIZE)
+        )
+
+        tested_cells += 1
+        if not _is_solid_cached(planet, cell.x, cell.y, cell.z, solid_cache):
+            continue
+
+        var neighbour := cell + face_step
+        tested_cells += 1
+
+        # Засчитываем только открытую грань блока, обращённую вверх.
+        if _is_solid_cached(
+            planet,
+            neighbour.x,
+            neighbour.y,
+            neighbour.z,
+            solid_cache
+        ):
+            continue
+
+        var face_distance: float
+        if face_direction > 0:
+            face_distance = (
+                float(cell[dominant_axis] + 1) * planet.BLOCK_SIZE
+                - probe_local[dominant_axis]
+            )
+        else:
+            face_distance = (
+                probe_local[dominant_axis]
+                - float(cell[dominant_axis]) * planet.BLOCK_SIZE
+            )
+
+        var allowed_face_distance: float = (
+            SUPPORT_PROBE_DEPTH * face_alignment
+            + SUPPORT_FACE_TOLERANCE * planet.BLOCK_SIZE
+        )
+
+        if face_distance >= 0.0 and face_distance <= allowed_face_distance:
+            supported_samples += 1
+
+        if supported_samples >= SUPPORT_REQUIRED_SAMPLES:
+            planet.record_collision_diagnostic(
+                diagnostic_phase,
+                tested_cells,
+                Time.get_ticks_usec() - started_usec
+            )
+            return true
 
     planet.record_collision_diagnostic(
         diagnostic_phase,
@@ -587,7 +629,6 @@ static func has_capsule_support(
         Time.get_ticks_usec() - started_usec
     )
     return false
-
 
 static func _get_segment_box_contact(
     point_a: Vector3,
