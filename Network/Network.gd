@@ -158,7 +158,7 @@ func _flush_mining_diagnostics() -> void:
 		if diag_server_mine_requests > 0:
 			server_mine_avg_ms = float(diag_server_mine_usec) / float(diag_server_mine_requests) / 1000.0
 
-				print(
+		print(
 			"DIAG SERVER | ticks: ", diag_server_ticks,
 			" | movement avg/max ms: ", "%.3f" % server_movement_avg_ms, "/", "%.3f" % (float(diag_server_movement_max_usec) / 1000.0),
 			" | collision calls/cells: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0),
@@ -177,7 +177,7 @@ func _flush_mining_diagnostics() -> void:
 		if diag_client_mine_requests > 0:
 			client_ray_avg_ms = float(diag_client_ray_usec) / float(diag_client_mine_requests) / 1000.0
 
-				print(
+		print(
 			"DIAG CLIENT | frames: ", diag_client_frames,
 			" | movement avg/max ms: ", "%.3f" % client_movement_avg_ms, "/", "%.3f" % (float(diag_client_movement_max_usec) / 1000.0),
 			" | collision calls/cells: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0),
@@ -1229,15 +1229,6 @@ func sync_player_list(players: Dictionary) -> void:
 
 	connected_players = updated_players
 
-		for id in connected_players:
-		var player_data: Dictionary = connected_players[id]
-
-		print(
-			"ID: ", id,
-			" | NAME: ", player_data["name"]
-		)
-
-	print("====================================")
 
 
 func _player_list_has_id(player_list: Dictionary, player_id: int) -> bool:
