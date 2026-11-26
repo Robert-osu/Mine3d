@@ -60,6 +60,9 @@ var correction_offset: Vector3 = Vector3.ZERO
 # Ссылка на планету.
 var planet: Planet
 
+# Защита от неограниченного накопления надёжных input RPC.
+const MAX_SERVER_INPUT_QUEUE: int = 120
+
 
 # ============================================================
 # INITIALIZATION
@@ -195,30 +198,32 @@ func _server_physics_process(delta: float) -> void:
 func _simulate_server_player(
     server_player: ServerPlayer,
     current_planet: Planet,
-    _delta: float
+    delta: float
 ) -> void:
 
-    while not server_player.input_queue.is_empty():
+    # За один физический тик применяем не более одного нового input.
+    # Если новых пакетов нет, продолжаем симуляцию с последним управлением.
+    if not server_player.input_queue.is_empty():
+        server_player.take_next_input()
 
-        var frame := server_player.take_next_input()
+    # Время симуляции задаёт серверный physics tick, а не клиентский пакет.
+    var result := _simulate_movement(
+        current_planet,
+        server_player.position,
+        server_player.velocity,
+        server_player.move_input,
+        server_player.look_direction,
+        server_player.buttons,
+        server_player.previous_buttons,
+        delta
+    )
 
-        var result := _simulate_movement(
-            current_planet,
-            server_player.position,
-            server_player.velocity,
-            frame["move_input"],
-            frame["look_direction"],
-            int(frame["buttons"]),
-            server_player.previous_buttons,
-            float(frame["delta"])
-        )
+    server_player.position = result["position"]
+    server_player.velocity = result["velocity"]
+    server_player.heading = result["heading"]
+    server_player.grounded = result["grounded"]
 
-        server_player.position = result["position"]
-        server_player.velocity = result["velocity"]
-        server_player.heading = result["heading"]
-        server_player.grounded = result["grounded"]
-
-        server_player.finish_tick()
+    server_player.finish_tick()
 
     # Выполняем отложенную добычу после обработки движения.
     if server_player.mine_requested:
@@ -387,7 +392,7 @@ func submit_input(
     move_input: Vector2,
     look_direction: Vector3,
     buttons: int,
-    delta: float
+    _client_delta: float
 ) -> void:
 
     if not multiplayer.is_server():
@@ -401,10 +406,11 @@ func submit_input(
     if not server_players.has(sender_id):
         return
 
-    if not is_finite(delta) or delta <= 0.0 or delta > 0.1:
-        return
-
     var server_player: ServerPlayer = server_players[sender_id]
+
+    # Не позволяем клиенту бесконечно раздувать очередь надёжных RPC.
+    if server_player.input_queue.size() >= MAX_SERVER_INPUT_QUEUE:
+        return
 
     # Проверяем порядковый номер.
     if sequence <= server_player.last_received_input_sequence:
@@ -436,8 +442,7 @@ func submit_input(
         sequence,
         move_input,
         look_direction,
-        buttons,
-        delta
+        buttons
     )
 
 
