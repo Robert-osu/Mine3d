@@ -463,7 +463,7 @@ static func has_capsule_support(
     # хотя опорой может быть только контакт под ногами.
     var half_segment: float = COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
     var point_a: Vector3 = local_position - local_up * half_segment
-    var point_b: Vector3 = point_a + local_up * (COLLISION_RADIUS * 0.5)
+    var point_b: Vector3 = point_a + local_up * COLLISION_RADIUS
     var margin: Vector3 = Vector3.ONE * COLLISION_RADIUS
 
     var bounds_min: Vector3 = Vector3(
