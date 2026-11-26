@@ -216,6 +216,9 @@ func _simulate_server_player(
     delta: float
 ) -> void:
 
+    # Применяем не более одного нового инпута за физический кадр.
+    server_player.apply_next_input()
+
     var result := _simulate_movement(
         current_planet,
         server_player.position,
@@ -233,7 +236,6 @@ func _simulate_server_player(
     server_player.grounded = result["grounded"]
 
     server_player.finish_tick()
-
 
 # ============================================================
 # CLIENT CONNECTION
@@ -390,7 +392,7 @@ func process_local_player(
 # CLIENT -> SERVER INPUT RPC
 # ============================================================
 
-@rpc("any_peer", "call_remote", "unreliable_ordered", 0)
+@rpc("any_peer", "call_remote", "reliable", 0)
 func submit_input(
     sequence: int,
     move_input: Vector2,
@@ -412,7 +414,7 @@ func submit_input(
     var server_player: ServerPlayer = server_players[sender_id]
 
     # Проверяем порядковый номер.
-    if sequence <= server_player.last_input_sequence:
+    if sequence <= server_player.last_received_input_sequence:
         return
 
     if sequence < 0:
@@ -581,6 +583,8 @@ func _reconcile_player(
             previous_buttons,
             float(frame["delta"])
         )
+
+        local_previous_buttons = previous_buttons
 
         corrected_position = result["position"]
         corrected_velocity = result["velocity"]
