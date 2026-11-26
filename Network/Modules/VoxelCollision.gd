@@ -125,7 +125,8 @@ static func move_capsule(
     var initial_collision := get_capsule_collision(
         planet,
         current_position,
-        initial_up
+        initial_up,
+        &"move_initial"
     )
 
     if initial_collision.collided:
@@ -173,7 +174,8 @@ static func move_capsule(
             var collision := get_capsule_collision(
                 planet,
                 candidate,
-                candidate_up
+                candidate_up,
+                &"move_candidate"
             )
 
             # Препятствий нет — принимаем перемещение.
@@ -201,7 +203,8 @@ static func move_capsule(
                 var test_collision := get_capsule_collision(
                     planet,
                     test_position,
-                    test_up
+                    test_up,
+                    &"move_binary"
                 )
 
                 if test_collision.collided:
@@ -352,7 +355,8 @@ static func _point_box_distance_squared(
 static func get_capsule_collision(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    diagnostic_phase: StringName = &"collision_other"
 ) -> CollisionResult:
 
     var started_usec: int = Time.get_ticks_usec()
@@ -432,6 +436,7 @@ static func get_capsule_collision(
         result.penetration = best_penetration
 
     planet.record_collision_diagnostic(
+        diagnostic_phase,
         tested_cells,
         Time.get_ticks_usec() - started_usec
     )
@@ -443,7 +448,8 @@ static func get_capsule_collision(
 static func has_capsule_support(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    diagnostic_phase: StringName = &"support_other"
 ) -> bool:
 
     var started_usec: int = Time.get_ticks_usec()
@@ -517,12 +523,14 @@ static func has_capsule_support(
 
                 if world_normal.dot(up) > 0.5:
                     planet.record_collision_diagnostic(
+                        diagnostic_phase,
                         tested_cells,
                         Time.get_ticks_usec() - started_usec
                     )
                     return true
 
     planet.record_collision_diagnostic(
+        diagnostic_phase,
         tested_cells,
         Time.get_ticks_usec() - started_usec
     )
@@ -615,7 +623,8 @@ static func resolve_capsule_collision(
             collision = get_capsule_collision(
                 planet,
                 position,
-                world_up
+                world_up,
+                &"move_resolve"
             )
 
         if not collision.collided:
