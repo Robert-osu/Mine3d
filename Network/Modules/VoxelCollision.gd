@@ -541,22 +541,17 @@ static func has_capsule_support(
     var tangent_right: Vector3 = up.cross(reference_axis).normalized()
     var tangent_forward: Vector3 = tangent_right.cross(up).normalized()
 
-    # Центр + 4 внутренние + 8 внешних точек. Такое распределение
-    # лучше приближает площадь диска, чем одно кольцо из 12 точек.
+    # Опора проверяется небольшой плоской площадкой радиусом 0.20 м.
+    # Это оставляет ограниченный свес за край блока, но не позволяет
+    # округлой нижней полусфере капсулы удерживать игрока на самом углу.
+    # Центральный луч + 16 равномерных проб по окружности.
     var sample_offsets: Array[Vector2] = [Vector2.ZERO]
-    var inner_radius: float = COLLISION_RADIUS * 0.35
-    var outer_radius: float = COLLISION_RADIUS * 0.8
+    var support_radius: float = 0.20
 
-    for i in range(4):
-        var angle: float = TAU * float(i) / 4.0
+    for i in range(16):
+        var angle: float = TAU * float(i) / 16.0
         sample_offsets.append(
-            Vector2(cos(angle), sin(angle)) * inner_radius
-        )
-
-    for i in range(8):
-        var angle: float = TAU * float(i) / 8.0
-        sample_offsets.append(
-            Vector2(cos(angle), sin(angle)) * outer_radius
+            Vector2(cos(angle), sin(angle)) * support_radius
         )
 
     var cache: Variant = solid_cache
@@ -564,7 +559,9 @@ static func has_capsule_support(
         cache = {}
 
     var supported_samples: int = 0
-    var required_samples: int = 7
+    # Любая точка компактной площадки, имеющая опору, удерживает игрока.
+    # Как только вся площадка выходит за край, гравитация снова действует.
+    var required_samples: int = 1
     var ray_start_height: float = 0.22 * planet.BLOCK_SIZE
     var ray_length: float = 0.42 * planet.BLOCK_SIZE
     var ray_step: float = 0.2 * planet.BLOCK_SIZE
