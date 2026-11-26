@@ -134,5 +134,6 @@ func welcome(
 func reject(reason: String) -> void:
     print("JOIN REJECTED: ", reason)
 
-    connected = false
+    Network._cleanup_client_connection()
     multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+    Network.peer = null

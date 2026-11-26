@@ -131,8 +131,10 @@ func start_server() -> void:
 		push_error("Server startup failed: %s" % error)
 		return
 
-	multiplayer.peer_connected.connect(_on_peer_connected)
-	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+	if not multiplayer.peer_connected.is_connected(_on_peer_connected):
+		multiplayer.peer_connected.connect(_on_peer_connected)
+	if not multiplayer.peer_disconnected.is_connected(_on_peer_disconnected):
+		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 
 	multiplayer.multiplayer_peer = peer
 
@@ -284,9 +286,12 @@ func start_client(address: String) -> void:
 		push_error("Client startup failed: %s" % error)
 		return
 
-	multiplayer.connected_to_server.connect(_on_connected)
-	multiplayer.connection_failed.connect(_on_connection_failed)
-	multiplayer.server_disconnected.connect(_on_server_disconnected)
+	if not multiplayer.connected_to_server.is_connected(_on_connected):
+		multiplayer.connected_to_server.connect(_on_connected)
+	if not multiplayer.connection_failed.is_connected(_on_connection_failed):
+		multiplayer.connection_failed.connect(_on_connection_failed)
+	if not multiplayer.server_disconnected.is_connected(_on_server_disconnected):
+		multiplayer.server_disconnected.connect(_on_server_disconnected)
 
 	multiplayer.multiplayer_peer = peer
 
@@ -303,17 +308,43 @@ func _on_connected() -> void:
 
 func _on_connection_failed() -> void:
 	print("CONNECTION FAILED")
+	_cleanup_client_connection()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	peer = null
 
 
 func _on_server_disconnected() -> void:
 	print("SERVER DISCONNECTED")
+	_cleanup_client_connection()
+	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	peer = null
+
+
+func _cleanup_client_connection() -> void:
+	# Сначала возвращаем локально предсказанные блоки, пока Planet ещё доступна.
+	_rollback_pending_mining_predictions()
 
 	pending_inputs.clear()
-	_rollback_pending_mining_predictions()
 	input_sequence = 0
 	local_velocity = Vector3.ZERO
 	local_previous_buttons = 0
+	local_grounded = false
+	last_received_server_tick = -1
+	correction_offset = Vector3.ZERO
+
+	# Старые состояния игроков не должны пережить разрыв соединения.
+	for player_id in remote_players.keys():
+		_remove_remote_player(int(player_id))
+
+	remote_players.clear()
+	remote_snapshots.clear()
+	connected_players.clear()
+
+	if is_instance_valid(connection_network):
+		connection_network.connected = false
+
+	if is_instance_valid(world_network):
+		world_network.reset_client_state()
 
 
 # ============================================================
@@ -1000,8 +1031,6 @@ func _remove_remote_player(player_id: int) -> void:
 		remote_players.erase(player_id)
 
 	remote_snapshots.erase(player_id)
-
-	print("REMOTE PLAYER REMOVED: ", player_id)
 
 func _update_remote_players() -> void:
 	var now := Time.get_ticks_msec() / 1000.0

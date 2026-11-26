@@ -117,6 +117,13 @@ func reset_client_sync(sync_id: int) -> void:
 	client_received_batches = 0
 
 
+func reset_client_state() -> void:
+	# Инвалидируем любые запоздавшие сообщения предыдущего соединения.
+	client_sync_id = -1
+	client_expected_batches = -1
+	client_received_batches = 0
+
+
 func _sort_section_keys(a: Vector3i, b: Vector3i) -> bool:
 	if a.x != b.x:
 		return a.x < b.x
