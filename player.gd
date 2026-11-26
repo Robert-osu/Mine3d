@@ -3,22 +3,9 @@ extends CharacterBody3D
 
 @export var planet: Planet
 
-@export_group("Movement")
-@export var move_speed := 5.0 * 10
-@export var acceleration := 20.0
-@export var gravity := 20.0 * 0.33
-@export var jump_force := 7.0 * 1.5
-
-@export_group("Camera")
-@export var mouse_sensitivity := 0.003
-@export var min_pitch := -89.0
-@export var max_pitch := 89.0
-@export var camera_height := 0.8
-
-@export_group("Flashlight")
-@export var flashlight_range := 24.0
-@export var flashlight_angle := 55.0
-@export var flashlight_energy := 7.0
+var settings: GameSettings:
+    get:
+        return GameConfig.SETTINGS
 
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
@@ -92,7 +79,7 @@ func _ready() -> void:
     update_orientation(spawn_direction)
 
     # Камера находится непосредственно на персонаже.
-    camera_pivot.position = Vector3(0, camera_height, 0)
+    camera_pivot.position = Vector3(0, settings.camera_height, 0)
     camera_pivot.rotation = Vector3.ZERO
 
     visual_rest_position = visual.position
@@ -123,9 +110,9 @@ func create_flashlight() -> void:
     flashlight.position = Vector3.ZERO
     flashlight.rotation = Vector3.ZERO
 
-    flashlight.spot_range = flashlight_range
-    flashlight.spot_angle = flashlight_angle
-    flashlight.light_energy = flashlight_energy
+    flashlight.spot_range = settings.flashlight_range
+    flashlight.spot_angle = settings.flashlight_angle
+    flashlight.light_energy = settings.flashlight_energy
 
     flashlight.spot_attenuation = 1.0
     flashlight.shadow_enabled = true
@@ -144,16 +131,16 @@ func _unhandled_input(event: InputEvent) -> void:
                 # Поворачиваем персонажа по горизонтали.
                 heading = heading.rotated(
                     up,
-                    -event.relative.x * mouse_sensitivity
+                    -event.relative.x * settings.mouse_sensitivity
                 ).normalized()
 
             # Вертикальный поворот только камеры.
-            camera_pivot.rotation.x -= event.relative.y * mouse_sensitivity
+            camera_pivot.rotation.x -= event.relative.y * settings.mouse_sensitivity
 
             camera_pivot.rotation.x = clampf(
                 camera_pivot.rotation.x,
-                deg_to_rad(min_pitch),
-                deg_to_rad(max_pitch)
+                deg_to_rad(settings.min_pitch),
+                deg_to_rad(settings.max_pitch)
             )
 
     if event is InputEventKey:
@@ -231,6 +218,12 @@ func _physics_process(delta: float) -> void:
     # Добыча.
     if mining_requested:
         mining_requested = false
+        print(
+            "CLIENT MINE | POSITION: ",
+            global_position,
+            " | LOOK: ",
+            -camera.global_basis.z
+        )
         mine_block()
 
 func update_orientation(up: Vector3) -> void:

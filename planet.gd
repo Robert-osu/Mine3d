@@ -1,19 +1,17 @@
 extends StaticBody3D
 class_name Planet
 
-@export_group("Planet")
-@export_range(1, 1000) var planet_scale: int = 5
+var settings:
+    get:
+        return GameConfig.SETTINGS
 
-@export_group("Chunks")
-@export_range(1, 8) var load_radius: int = 3
-@export_range(0, 16) var air_chunks_above: int = 4
-@export_range(1, 6) var unload_radius: int = 3
-@export_range(96, 2048) var blocks_per_frame: int = 512
+var SIZE: int:
+    get:
+        return CHUNK_SIZE * settings.planet_scale
 
-@export_group("Visual")
-@export var terrain_color: Color = Color("#8b765e")
-
-@export_range(1, 16) var sections_per_frame: int = 2
+var RADIUS: float:
+    get:
+        return 14.0 * settings.planet_scale
 
 const CHUNK_SIZE: int = 32
 const BLOCK_SIZE: float = 1.0
@@ -48,9 +46,6 @@ const FACE_NORMALS: Array[Vector3] = [
     Vector3.FORWARD
 ]
 
-var SIZE: int = 0
-var RADIUS: float = 0.0
-
 # chunks[key] = { root, blocks, request_id, pending_cells, build_cursor }
 # blocks[cell] = StaticBody3D for a currently visible block.
 var chunks: Dictionary = {}
@@ -70,15 +65,10 @@ var completed_mutex := Mutex.new()
 var worker_task_ids: Dictionary = {}
 var next_request_id: int = 0
 
-const MAX_PARALLEL_CHUNKS: int = 2
-const MAX_CHUNKS_PER_FRAME: int = 1
 
 # -----------------------------------------------------------------------------
 # ASYNC SECTION BUILDER
 # -----------------------------------------------------------------------------
-
-const MAX_PARALLEL_SECTION_JOBS: int = 2
-const MAX_SECTION_JOBS_PER_FRAME: int = 2
 
 const SECTION_SNAPSHOT_SIZE: int = SECTION_SIZE + 2
 
@@ -230,15 +220,17 @@ func _clear_temporary_section_faces(
 func _ready() -> void:
     add_to_group("planet")
 
-    SIZE = 32 * planet_scale
-    RADIUS = 14.0 * planet_scale
-
     terrain_material = StandardMaterial3D.new()
-    terrain_material.albedo_color = terrain_color
+    terrain_material.albedo_color = settings.terrain_color
     terrain_material.roughness = 1.0
     terrain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-    print("Planet initialized. Size: ", SIZE, " Radius: ", RADIUS)
+    print(
+        "Planet initialized. Size: ",
+        SIZE,
+        " Radius: ",
+        RADIUS
+    )
 
 
 func _process(_delta: float) -> void:
@@ -381,8 +373,8 @@ func start_section_jobs() -> void:
     var sections_to_check: int = section_queue.size()
 
     while (
-        started < MAX_SECTION_JOBS_PER_FRAME
-        and active_section_requests.size() < MAX_PARALLEL_SECTION_JOBS
+        started < settings.max_section_jobs_per_frame
+        and active_section_requests.size() < settings.max_parallel_section_jobs
         and not section_queue.is_empty()
         and sections_to_check > 0
     ):
@@ -591,8 +583,8 @@ func start_chunk_jobs() -> void:
     var started: int = 0
 
     while (
-        started < MAX_CHUNKS_PER_FRAME
-        and active_chunk_requests.size() < MAX_PARALLEL_CHUNKS
+        started < settings.max_chunks_per_frame
+        and active_chunk_requests.size() < settings.max_parallel_chunks
         and not chunk_queue.is_empty()
     ):
         # Сначала генерируем чанк, ближайший к игроку.
@@ -866,7 +858,7 @@ func apply_completed_chunk_data() -> void:
     chunk_data["section_build_cursor"] = 0
 
 func process_pending_block_creation() -> void:
-    var budget: int = sections_per_frame
+    var budget: int = settings.sections_per_frame
 
     var chunk_keys: Array = chunks.keys()
     chunk_keys.sort_custom(_sort_chunk_keys_near_player)
@@ -1321,9 +1313,9 @@ func update_streaming(world_position: Vector3) -> void:
     # 1. Загружаем чанки поверхности вокруг игрока.
     # -------------------------------------------------
 
-    for z in range(-load_radius, load_radius + 1):
-        for y in range(-load_radius, load_radius + 1):
-            for x in range(-load_radius, load_radius + 1):
+    for z in range(-settings.load_radius, settings.load_radius + 1):
+        for y in range(-settings.load_radius, settings.load_radius + 1):
+            for x in range(-settings.load_radius, settings.load_radius + 1):
                 var key := center_chunk + Vector3i(x, y, z)
 
                 if not is_valid_chunk(key):
@@ -1341,7 +1333,7 @@ func update_streaming(world_position: Vector3) -> void:
     # 2. Загружаем дополнительные чанки над поверхностью.
     # -------------------------------------------------
 
-    for i in range(1, air_chunks_above + 1):
+    for i in range(1, settings.air_chunks_above + 1):
         var above_chunk := center_chunk + Vector3i(
             roundi(radial_direction.x * i),
             roundi(radial_direction.y * i),
@@ -1360,9 +1352,9 @@ func update_streaming(world_position: Vector3) -> void:
     # 3. Сохраняем уже загруженные чанки в радиусе выгрузки.
     # -------------------------------------------------
 
-    for z in range(-unload_radius, unload_radius + 1):
-        for y in range(-unload_radius, unload_radius + 1):
-            for x in range(-unload_radius, unload_radius + 1):
+    for z in range(-settings.unload_radius, settings.unload_radius + 1):
+        for y in range(-settings.unload_radius, settings.unload_radius + 1):
+            for x in range(-settings.unload_radius, settings.unload_radius + 1):
                 var key := center_chunk + Vector3i(x, y, z)
 
                 if chunks.has(key):
@@ -1769,21 +1761,21 @@ func configure_world(server_scale: int) -> bool:
         push_error("Invalid planet scale: %d" % server_scale)
         return false
 
-    # Не разрешаем менять размер мира,
-    # если клиент уже начал загружать чанки.
     if not chunks.is_empty():
         push_error("Cannot configure planet after chunk loading!")
         return false
 
-    planet_scale = server_scale
-    SIZE = 32 * planet_scale
-    RADIUS = 14.0 * planet_scale
+    settings.planet_scale = server_scale
 
-    last_center_chunk = Vector3i(-999999, -999999, -999999)
+    last_center_chunk = Vector3i(
+        -999999,
+        -999999,
+        -999999
+    )
 
     print(
         "WORLD CONFIG APPLIED | SCALE: ",
-        planet_scale,
+        settings.planet_scale,
         " | SIZE: ",
         SIZE,
         " | RADIUS: ",
@@ -1791,3 +1783,5 @@ func configure_world(server_scale: int) -> bool:
     )
 
     return true
+
+

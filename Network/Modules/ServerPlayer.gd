@@ -39,6 +39,8 @@ var input_queue: Array[Dictionary] = []
 
 var grounded: bool = false
 
+var mine_requested: bool = false
+
 # Параметры движения.
 const MOVE_SPEED := 50.0
 const ACCELERATION := 20.0
@@ -73,7 +75,8 @@ func set_input(
     sequence: int,
     new_move_input: Vector2,
     new_look_direction: Vector3,
-    new_buttons: int
+    new_buttons: int,
+    delta: float
 ) -> void:
 
     if sequence <= last_received_input_sequence:
@@ -85,15 +88,14 @@ func set_input(
         "sequence": sequence,
         "move_input": new_move_input.limit_length(1.0),
         "look_direction": new_look_direction.normalized(),
-        "buttons": new_buttons
+        "buttons": new_buttons,
+        "delta": delta
     })
 
-
 # Применяем следующий инпут из очереди.
-func apply_next_input() -> void:
-
+func take_next_input() -> Dictionary:
     if input_queue.is_empty():
-        return
+        return {}
 
     var frame: Dictionary = input_queue.pop_front()
 
@@ -101,10 +103,9 @@ func apply_next_input() -> void:
     look_direction = frame["look_direction"]
     buttons = frame["buttons"]
 
-    # Подтверждаем только тот инпут,
-    # который действительно будет симулирован.
     last_input_sequence = frame["sequence"]
 
+    return frame
 
 # Завершаем физический шаг.
 func finish_tick() -> void:
