@@ -609,6 +609,16 @@ func _reconcile_player(
     local_velocity = corrected_velocity
     local_player.velocity = corrected_velocity
 
+    # Разница нужна для диагностики.
+    var error_distance := old_position.distance_to(corrected_position)
+
+    if error_distance > settings.reconciliation_epsilon:
+        print(
+            "PLAYER RECONCILIATION | ERROR: ",
+            error_distance,
+            " | PENDING INPUTS: ",
+            pending_inputs.size()
+        )
 
 
 # ============================================================
@@ -959,6 +969,14 @@ func _server_mine_block(
         server_player.position - center
     ).normalized()
 
+    # Запрещаем добычу при любом движении,
+    # включая прыжок, падение и скольжение.
+    if server_player.move_input.length_squared() > 0.05:
+        return
+
+    if server_player.velocity.length_squared() > 0.05:
+        return
+
     var ray_origin := server_player.position + up * 0.8
     var ray_direction := server_player.look_direction.normalized()
 
@@ -981,4 +999,12 @@ func _server_mine_block(
 
     receive_block_destroyed.rpc(cell)
 
+    print(
+        "SERVER MINE | POSITION: ",
+        server_player.position,
+        " | LOOK: ",
+        server_player.look_direction,
+        " | CELL: ",
+        cell
+    )
 
