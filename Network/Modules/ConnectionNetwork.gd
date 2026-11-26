@@ -53,7 +53,7 @@ func hello(version: int, requested_name: String) -> void:
 
     print("PLAYER AUTHORIZED: ", clean_name, " ID: ", sender_id)
 
-    var server_scale := (
+    var server_scale: int = (
         current_planet.world_scale
         if current_planet.world_scale > 0
         else current_planet.settings.planet_scale
