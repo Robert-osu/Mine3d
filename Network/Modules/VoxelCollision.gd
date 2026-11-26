@@ -563,13 +563,26 @@ static func has_capsule_support(
             )
             offset = Vector2(cos(angle), sin(angle)) * (COLLISION_RADIUS * 0.8)
 
+        # У нижней полусферы капсулы крайние точки выше нижнего полюса.
+        # Учитываем sagitta, иначе кольцевые пробы оказываются слишком низко
+        # и опора ошибочно теряется ещё до фактического схода с края.
+        var sample_radius: float = offset.length()
+        var sphere_height: float = COLLISION_RADIUS - sqrt(
+            maxf(
+                0.0,
+                COLLISION_RADIUS * COLLISION_RADIUS
+                - sample_radius * sample_radius
+            )
+        )
+
         var sample_world: Vector3 = (
             foot_center
+            + up * sphere_height
             + tangent_right * offset.x
             + tangent_forward * offset.y
         )
         var probe_local: Vector3 = planet.to_local(
-            sample_world - up * SUPPORT_PROBE_DEPTH
+            sample_world - up * (SUPPORT_PROBE_DEPTH + sphere_height)
         )
 
         var cell := Vector3i(
