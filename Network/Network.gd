@@ -961,12 +961,12 @@ func _server_mine_block(
 		server_player.position - center
 	).normalized()
 
-	# Запрещаем добычу при любом движении,
-	# включая прыжок, падение и скольжение.
+	# Запрещаем добычу при активном движении по поверхности
+	# и в воздухе. Остаточная скорость при опоре не блокирует удар.
 	if server_player.move_input.length_squared() > 0.05:
 		return false
 
-	if server_player.velocity.length_squared() > 0.05:
+	if not server_player.grounded:
 		return false
 
 	var ray_origin := server_player.position + up * 0.8
