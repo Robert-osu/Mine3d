@@ -54,13 +54,14 @@ func _ready() -> void:
 
             await get_tree().process_frame
 
-    var center := planet.to_global(planet.get_planet_center())
+    var surface_point := Network.get_player_spawn_surface_point(
+        planet,
+        Network.local_spawn_slot
+    )
     var spawn_position := Network.get_player_spawn_position(
         planet,
         Network.local_spawn_slot
     )
-    var spawn_direction := (spawn_position - center).normalized()
-    var surface_point := center + spawn_direction * (planet.RADIUS - 0.5)
 
     global_position = spawn_position
     planet.update_streaming(global_position)

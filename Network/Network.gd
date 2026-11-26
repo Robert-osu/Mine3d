@@ -161,13 +161,14 @@ func _on_peer_disconnected(id: int) -> void:
 
 
 # Все участники используют одну детерминированную раскладку спавнов.
-# Золотая спираль равномерно размещает игроков компактной группой
-# вокруг северного полюса, не помещая их в одну точку.
+# Золотая спираль размещает игроков компактной группой вокруг северного полюса.
 const SPAWN_SPACING: float = 1.25
 const SPAWN_GOLDEN_ANGLE: float = 2.399963229728653
+const SPAWN_SEARCH_RADIUS: int = 24
+const SPAWN_SEARCH_DEPTH: int = 12
 
 
-func get_player_spawn_position(
+func get_player_spawn_surface_point(
 	current_planet: Planet,
 	spawn_slot: int
 ) -> Vector3:
@@ -185,11 +186,80 @@ func get_player_spawn_position(
 		sin(angle) * distance
 	).normalized()
 
-	return current_planet.to_global(
-		current_planet.get_planet_center()
-		+ local_direction * (current_planet.RADIUS + 3.0)
+	var center := current_planet.get_planet_center()
+	var target_surface := center + local_direction * current_planet.RADIUS
+	var target_cell := current_planet.get_cell(
+		current_planet.to_global(target_surface)
 	)
 
+	var half_size := float(current_planet.SIZE) * 0.5
+	var radius_squared := current_planet.RADIUS * current_planet.RADIUS
+
+	# Ищем ближайшую неповреждённую верхнюю ячейку.
+	# Кольца обходятся в фиксированном порядке, поэтому сервер и клиенты
+	# при одинаковом снимке разрушений выберут одну и ту же точку.
+	for ring in range(SPAWN_SEARCH_RADIUS + 1):
+		for offset_z in range(-ring, ring + 1):
+			for offset_x in range(-ring, ring + 1):
+				if (
+					ring > 0
+					and maxi(absi(offset_x), absi(offset_z)) != ring
+				):
+					continue
+
+				var cell_x := target_cell.x + offset_x
+				var cell_z := target_cell.z + offset_z
+
+				var dx := float(cell_x) + 0.5 - half_size
+				var dz := float(cell_z) + 0.5 - half_size
+				var remaining_radius := radius_squared - dx * dx - dz * dz
+
+				if remaining_radius < 0.0:
+					continue
+
+				# Верхний геометрически возможный блок на этой колонке.
+				var surface_y := half_size + sqrt(remaining_radius)
+				var top_cell_y := floori(surface_y - 0.5)
+
+				# Если верхний блок выкопан, пробуем блоки непосредственно под ним.
+				for depth in range(SPAWN_SEARCH_DEPTH + 1):
+					var candidate_cell := Vector3i(
+						cell_x,
+						top_cell_y - depth,
+						cell_z
+					)
+
+					if candidate_cell.y < 0:
+						break
+
+					if current_planet.is_block_visible(candidate_cell):
+						var cell_center := Vector3(candidate_cell) + Vector3(0.5, 0.5, 0.5)
+						return current_planet.to_global(cell_center)
+
+	# Если вокруг всей области нет подходящего блока, оставляем исходную точку:
+	# обычный таймаут спавна покажет проблему, не скрывая её.
+	return current_planet.to_global(target_surface)
+
+
+func get_player_spawn_position(
+	current_planet: Planet,
+	spawn_slot: int
+) -> Vector3:
+
+	if current_planet == null:
+		return Vector3.ZERO
+
+	var surface_point := get_player_spawn_surface_point(
+		current_planet,
+		spawn_slot
+	)
+	var center := current_planet.get_planet_center()
+	var surface_local := current_planet.to_local(surface_point)
+	var spawn_direction := (surface_local - center).normalized()
+
+	return current_planet.to_global(
+		center + spawn_direction * (current_planet.RADIUS + 3.0)
+	)
 
 func create_server_player(id: int) -> void:
 	if not multiplayer.is_server():
