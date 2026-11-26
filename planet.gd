@@ -1,6 +1,61 @@
 extends StaticBody3D
 class_name Planet
 
+# Лёгкие счётчики для диагностики добычи и воксельных столкновений.
+var diag_collision_calls: int = 0
+var diag_collision_cells: int = 0
+var diag_collision_max_usec: int = 0
+var diag_ray_calls: int = 0
+var diag_ray_steps: int = 0
+var diag_ray_max_steps: int = 0
+var diag_destroy_calls: int = 0
+var diag_destroy_max_usec: int = 0
+var diag_section_queue_max: int = 0
+
+
+func record_collision_diagnostic(cells_checked: int, elapsed_usec: int) -> void:
+	diag_collision_calls += 1
+	diag_collision_cells += cells_checked
+	diag_collision_max_usec = maxi(diag_collision_max_usec, elapsed_usec)
+
+
+func _record_mining_ray_diagnostic(steps: int) -> void:
+	diag_ray_calls += 1
+	diag_ray_steps += steps
+	diag_ray_max_steps = maxi(diag_ray_max_steps, steps)
+
+
+func _record_destroy_diagnostic(elapsed_usec: int) -> void:
+	diag_destroy_calls += 1
+	diag_destroy_max_usec = maxi(diag_destroy_max_usec, elapsed_usec)
+
+
+func consume_mining_debug_stats() -> Dictionary:
+	var result := {
+		"collision_calls": diag_collision_calls,
+		"collision_cells": diag_collision_cells,
+		"collision_max_usec": diag_collision_max_usec,
+		"ray_calls": diag_ray_calls,
+		"ray_steps": diag_ray_steps,
+		"ray_max_steps": diag_ray_max_steps,
+		"destroy_calls": diag_destroy_calls,
+		"destroy_max_usec": diag_destroy_max_usec,
+		"section_queue_max": diag_section_queue_max
+	}
+
+	diag_collision_calls = 0
+	diag_collision_cells = 0
+	diag_collision_max_usec = 0
+	diag_ray_calls = 0
+	diag_ray_steps = 0
+	diag_ray_max_steps = 0
+	diag_destroy_calls = 0
+	diag_destroy_max_usec = 0
+	diag_section_queue_max = section_queue.size()
+	return result
+
+
+
 var settings:
     get:
         return GameConfig.SETTINGS
@@ -370,10 +425,12 @@ func queue_section_rebuild(
 
     # Если секция уже стоит в очереди, не добавляем повторно.
     if queued_sections.has(section_id):
+        diag_section_queue_max = maxi(diag_section_queue_max, section_queue.size())
         return
 
     queued_sections[section_id] = true
     section_queue.append(section_id)
+    diag_section_queue_max = maxi(diag_section_queue_max, section_queue.size())
 
 
 func start_section_jobs() -> void:
@@ -1123,7 +1180,9 @@ func is_solid(x: int, y: int, z: int) -> bool:
 
 
 func destroy_block(cell: Vector3i) -> bool:
+    var destroy_started_usec: int = Time.get_ticks_usec()
     if not is_solid(cell.x, cell.y, cell.z):
+        _record_destroy_diagnostic(Time.get_ticks_usec() - destroy_started_usec)
         return false
 
     set_block_destroyed(cell)
@@ -1170,6 +1229,7 @@ func destroy_block(cell: Vector3i) -> bool:
                 neighbor_section
             )
 
+    _record_destroy_diagnostic(Time.get_ticks_usec() - destroy_started_usec)
     return true
 
 
@@ -1227,9 +1287,12 @@ func get_mined_cell(
     )
 
     var distance := 0.0
+    var ray_steps: int = 0
 
     while distance <= max_distance:
+        ray_steps += 1
         if is_solid(cell.x, cell.y, cell.z):
+            _record_mining_ray_diagnostic(ray_steps)
             return cell
 
         if t_max.x < t_max.y and t_max.x < t_max.z:
@@ -1247,6 +1310,7 @@ func get_mined_cell(
             t_max.z += t_delta.z
             cell.z += step.z
 
+    _record_mining_ray_diagnostic(ray_steps)
     return Vector3i(-1, -1, -1)
 
 

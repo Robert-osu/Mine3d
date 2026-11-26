@@ -77,6 +77,33 @@ const MAX_INPUT_SEQUENCE_GAP: int = 120
 const INPUT_RATE_WINDOW_TICKS: int = 60
 const MAX_INPUT_RPCS_PER_WINDOW: int = 90
 
+# Диагностика узкого места при добыче. Счётчики сбрасываются раз в секунду.
+const DIAGNOSTICS_INTERVAL: float = 1.0
+var diagnostics_elapsed: float = 0.0
+var diag_server_ticks: int = 0
+var diag_server_tick_usec: int = 0
+var diag_server_tick_max_usec: int = 0
+var diag_server_movement_calls: int = 0
+var diag_server_movement_usec: int = 0
+var diag_server_movement_max_usec: int = 0
+var diag_server_mine_requests: int = 0
+var diag_server_mined: int = 0
+var diag_server_mine_usec: int = 0
+var diag_server_mine_max_usec: int = 0
+var diag_server_input_accepted: int = 0
+var diag_server_input_rejected: int = 0
+var diag_server_input_queue_max: int = 0
+var diag_client_frames: int = 0
+var diag_client_movement_usec: int = 0
+var diag_client_movement_max_usec: int = 0
+var diag_client_mine_requests: int = 0
+var diag_client_ray_usec: int = 0
+var diag_client_ray_max_usec: int = 0
+var diag_client_destroy_usec: int = 0
+var diag_client_destroy_max_usec: int = 0
+var diag_client_pending_inputs_max: int = 0
+var diag_client_pending_mining_max: int = 0
+
 
 # ============================================================
 # INITIALIZATION
@@ -100,6 +127,93 @@ func _ready() -> void:
 		start_server()
 	else:
 		start_client("127.0.0.1")
+
+
+func _process(delta: float) -> void:
+	diagnostics_elapsed += delta
+	if diagnostics_elapsed < DIAGNOSTICS_INTERVAL:
+		return
+
+	diagnostics_elapsed = fmod(diagnostics_elapsed, DIAGNOSTICS_INTERVAL)
+	_flush_mining_diagnostics()
+
+
+func _flush_mining_diagnostics() -> void:
+	var current_planet := _get_planet()
+	var planet_stats: Dictionary = {}
+	if current_planet != null:
+		planet_stats = current_planet.consume_mining_debug_stats()
+
+	if multiplayer.is_server():
+		var server_tick_avg_ms := 0.0
+		var server_movement_avg_ms := 0.0
+		var server_mine_avg_ms := 0.0
+		if diag_server_ticks > 0:
+			server_tick_avg_ms = float(diag_server_tick_usec) / float(diag_server_ticks) / 1000.0
+		if diag_server_movement_calls > 0:
+			server_movement_avg_ms = float(diag_server_movement_usec) / float(diag_server_movement_calls) / 1000.0
+		if diag_server_mine_requests > 0:
+			server_mine_avg_ms = float(diag_server_mine_usec) / float(diag_server_mine_requests) / 1000.0
+
+		print(
+			"DIAG SERVER | ticks: ", diag_server_ticks,
+			" | tick avg/max ms: ", "%.3f" % server_tick_avg_ms, "/", "%.3f" % (float(diag_server_tick_max_usec) / 1000.0),
+			" | movement calls/avg/max ms: ", diag_server_movement_calls, "/", "%.3f" % server_movement_avg_ms, "/", "%.3f" % (float(diag_server_movement_max_usec) / 1000.0),
+			" | mine req/success: ", diag_server_mine_requests, "/", diag_server_mined,
+			" | mine avg/max ms: ", "%.3f" % server_mine_avg_ms, "/", "%.3f" % (float(diag_server_mine_max_usec) / 1000.0),
+			" | input accepted/rejected: ", diag_server_input_accepted, "/", diag_server_input_rejected,
+			" | input queue max: ", diag_server_input_queue_max,
+			" | collision calls/cells/max ms: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0), "/", "%.3f" % (float(planet_stats.get("collision_max_usec", 0)) / 1000.0),
+			" | ray calls/steps max: ", planet_stats.get("ray_calls", 0), "/", planet_stats.get("ray_steps", 0), "/", planet_stats.get("ray_max_steps", 0),
+			" | destroy calls/max ms: ", planet_stats.get("destroy_calls", 0), "/", "%.3f" % (float(planet_stats.get("destroy_max_usec", 0)) / 1000.0),
+			" | section queue max: ", planet_stats.get("section_queue_max", 0)
+		)
+	else:
+		var client_movement_avg_ms := 0.0
+		var client_ray_avg_ms := 0.0
+		var client_destroy_avg_ms := 0.0
+		if diag_client_frames > 0:
+			client_movement_avg_ms = float(diag_client_movement_usec) / float(diag_client_frames) / 1000.0
+		if diag_client_mine_requests > 0:
+			client_ray_avg_ms = float(diag_client_ray_usec) / float(diag_client_mine_requests) / 1000.0
+			client_destroy_avg_ms = float(diag_client_destroy_usec) / float(diag_client_mine_requests) / 1000.0
+
+		print(
+			"DIAG CLIENT | frames: ", diag_client_frames,
+			" | movement avg/max ms: ", "%.3f" % client_movement_avg_ms, "/", "%.3f" % (float(diag_client_movement_max_usec) / 1000.0),
+			" | mine req: ", diag_client_mine_requests,
+			" | ray avg/max ms: ", "%.3f" % client_ray_avg_ms, "/", "%.3f" % (float(diag_client_ray_max_usec) / 1000.0),
+			" | destroy avg/max ms: ", "%.3f" % client_destroy_avg_ms, "/", "%.3f" % (float(diag_client_destroy_max_usec) / 1000.0),
+			" | pending input/mining max: ", diag_client_pending_inputs_max, "/", diag_client_pending_mining_max,
+			" | collision calls/cells/max ms: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0), "/", "%.3f" % (float(planet_stats.get("collision_max_usec", 0)) / 1000.0),
+			" | ray calls/steps max: ", planet_stats.get("ray_calls", 0), "/", planet_stats.get("ray_steps", 0), "/", planet_stats.get("ray_max_steps", 0),
+			" | destroy calls/max ms: ", planet_stats.get("destroy_calls", 0), "/", "%.3f" % (float(planet_stats.get("destroy_max_usec", 0)) / 1000.0),
+			" | section queue max: ", planet_stats.get("section_queue_max", 0)
+		)
+
+	diag_server_ticks = 0
+	diag_server_tick_usec = 0
+	diag_server_tick_max_usec = 0
+	diag_server_movement_calls = 0
+	diag_server_movement_usec = 0
+	diag_server_movement_max_usec = 0
+	diag_server_mine_requests = 0
+	diag_server_mined = 0
+	diag_server_mine_usec = 0
+	diag_server_mine_max_usec = 0
+	diag_server_input_accepted = 0
+	diag_server_input_rejected = 0
+	diag_server_input_queue_max = 0
+	diag_client_frames = 0
+	diag_client_movement_usec = 0
+	diag_client_movement_max_usec = 0
+	diag_client_mine_requests = 0
+	diag_client_ray_usec = 0
+	diag_client_ray_max_usec = 0
+	diag_client_destroy_usec = 0
+	diag_client_destroy_max_usec = 0
+	diag_client_pending_inputs_max = 0
+	diag_client_pending_mining_max = 0
 
 
 func _physics_process(delta: float) -> void:
@@ -305,6 +419,7 @@ func _server_physics_process(_delta: float) -> void:
 	if current_planet == null:
 		return
 
+	var tick_started_usec: int = Time.get_ticks_usec()
 	server_physics_tick += 1
 	snapshot_counter += 1
 
@@ -322,6 +437,11 @@ func _server_physics_process(_delta: float) -> void:
 	if snapshot_counter >= settings.snapshot_interval:
 		snapshot_counter = 0
 		_broadcast_player_states()
+
+	var tick_elapsed_usec: int = Time.get_ticks_usec() - tick_started_usec
+	diag_server_ticks += 1
+	diag_server_tick_usec += tick_elapsed_usec
+	diag_server_tick_max_usec = maxi(diag_server_tick_max_usec, tick_elapsed_usec)
 
 
 func _simulate_server_player(
@@ -346,6 +466,7 @@ func _simulate_server_player(
 		server_player.buttons = 0
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
+	var movement_started_usec: int = Time.get_ticks_usec()
 	var result := _simulate_movement(
 		current_planet,
 		server_player.position,
@@ -356,6 +477,10 @@ func _simulate_server_player(
 		server_player.previous_buttons,
 		delta
 	)
+	var movement_elapsed_usec: int = Time.get_ticks_usec() - movement_started_usec
+	diag_server_movement_calls += 1
+	diag_server_movement_usec += movement_elapsed_usec
+	diag_server_movement_max_usec = maxi(diag_server_movement_max_usec, movement_elapsed_usec)
 
 	server_player.position = result["position"]
 	server_player.velocity = result["velocity"]
@@ -369,10 +494,17 @@ func _simulate_server_player(
 	var sequence: int = int(input_frame.get("sequence", -1))
 
 	for request_index in range(mine_requests):
+		var mine_started_usec: int = Time.get_ticks_usec()
 		var mined_cell := _server_mine_block(
 			server_player,
 			current_planet
 		)
+		var mine_elapsed_usec: int = Time.get_ticks_usec() - mine_started_usec
+		diag_server_mine_requests += 1
+		diag_server_mine_usec += mine_elapsed_usec
+		diag_server_mine_max_usec = maxi(diag_server_mine_max_usec, mine_elapsed_usec)
+		if mined_cell != INVALID_MINED_CELL:
+			diag_server_mined += 1
 
 		mining_result.rpc_id(
 			server_player.peer_id,
@@ -532,8 +664,11 @@ func process_local_player(
 
 	# Сохраняем ввод до подтверждения сервером.
 	pending_inputs.append(frame)
+	diag_client_pending_inputs_max = maxi(diag_client_pending_inputs_max, pending_inputs.size())
+	diag_client_frames += 1
 
 	# Сразу выполняем локальное предсказание.
+	var movement_started_usec: int = Time.get_ticks_usec()
 	var result := _simulate_movement(
 		current_planet,
 		player.global_position,
@@ -544,6 +679,9 @@ func process_local_player(
 		local_previous_buttons,
 		delta
 	)
+	var movement_elapsed_usec: int = Time.get_ticks_usec() - movement_started_usec
+	diag_client_movement_usec += movement_elapsed_usec
+	diag_client_movement_max_usec = maxi(diag_client_movement_max_usec, movement_elapsed_usec)
 
 	player.global_position = result["position"]
 	local_velocity = result["velocity"]
@@ -556,6 +694,7 @@ func process_local_player(
 	# Предсказываем добычу локально, не ожидая ответа сервера.
 	# Сервер всё равно самостоятельно определит блок по своему состоянию.
 	for request_index in range(mine_requests):
+		diag_client_mine_requests += 1
 		var predicted_cell := INVALID_MINED_CELL
 
 		if (
@@ -569,18 +708,26 @@ func process_local_player(
 			var ray_origin := player.global_position + up * 0.8
 			var predicted_look := look_direction.normalized()
 
+			var ray_started_usec: int = Time.get_ticks_usec()
 			var candidate := current_planet.get_mined_cell(
 				ray_origin,
 				predicted_look,
 				settings.mining_distance
 			)
+			var ray_elapsed_usec: int = Time.get_ticks_usec() - ray_started_usec
+			diag_client_ray_usec += ray_elapsed_usec
+			diag_client_ray_max_usec = maxi(diag_client_ray_max_usec, ray_elapsed_usec)
 
-			if (
-				candidate != INVALID_MINED_CELL
-				and current_planet.destroy_block(candidate)
-			):
-				predicted_cell = candidate
+			if candidate != INVALID_MINED_CELL:
+				var destroy_started_usec: int = Time.get_ticks_usec()
+				var destroyed: bool = current_planet.destroy_block(candidate)
+				var destroy_elapsed_usec: int = Time.get_ticks_usec() - destroy_started_usec
+				diag_client_destroy_usec += destroy_elapsed_usec
+				diag_client_destroy_max_usec = maxi(diag_client_destroy_max_usec, destroy_elapsed_usec)
+				if destroyed:
+					predicted_cell = candidate
 
+		diag_client_pending_mining_max = maxi(diag_client_pending_mining_max, pending_mining_predictions.size() + 1)
 		pending_mining_predictions[Vector2i(
 			input_sequence,
 			request_index
@@ -684,6 +831,8 @@ func submit_input(
 		mine_requests,
 		server_physics_tick
 	)
+	diag_server_input_accepted += 1
+	diag_server_input_queue_max = maxi(diag_server_input_queue_max, server_player.input_queue.size())
 
 
 func _allow_input_rpc(server_player: ServerPlayer) -> bool:
@@ -699,6 +848,7 @@ func _allow_input_rpc(server_player: ServerPlayer) -> bool:
 
 
 func _reject_input(sender_id: int, sequence: int, mine_requests: int) -> void:
+	diag_server_input_rejected += 1
 	if mine_requests >= 0 and mine_requests <= 8 and sequence >= 0:
 		for request_index in range(mine_requests):
 			mining_result.rpc_id(

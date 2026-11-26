@@ -390,6 +390,7 @@ static func get_capsule_collision(
     for x in range(min_cell.x, max_cell.x + 1):
         for y in range(min_cell.y, max_cell.y + 1):
             for z in range(min_cell.z, max_cell.z + 1):
+                tested_cells += 1
 
                 if not planet.is_solid(x, y, z):
                     continue
