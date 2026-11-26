@@ -125,7 +125,8 @@ static func is_capsule_blocked(
 static func move_capsule(
     planet: Planet,
     world_position: Vector3,
-    displacement: Vector3
+    displacement: Vector3,
+    cache: Variant = null
 ) -> Vector3:
 
     if planet == null or displacement.length_squared() < 0.000001:
@@ -136,10 +137,11 @@ static func move_capsule(
     )
 
     var current_position := world_position
-    # Один вызов перемещения многократно проверяет соседние ячейки.
-    # Кэш живёт только в пределах этого вызова, поэтому добыча между
-    # отдельными перемещениями не может оставить в нём устаревшие данные.
-    var solid_cache: Dictionary = {}
+    # Используем кэш вызывающей симуляции или создаём локальный,
+    # если move_capsule вызван самостоятельно.
+    var cache: Variant = cache
+    if cache == null:
+        cache = {}
 
     # Если персонаж уже находится внутри блока,
     # сначала пытаемся устранить проникновение.
@@ -152,7 +154,7 @@ static func move_capsule(
         current_position,
         initial_up,
         &"move_initial",
-        solid_cache
+        cache
     )
 
     if initial_collision.collided:
@@ -160,7 +162,8 @@ static func move_capsule(
             planet,
             current_position,
             initial_up,
-            initial_collision
+            initial_collision,
+            cache
         )
 
     # Ограничиваем размер шага и общее число шагов.
@@ -202,7 +205,7 @@ static func move_capsule(
                 candidate,
                 candidate_up,
                 &"move_candidate",
-                solid_cache
+                cache
             )
 
             # Препятствий нет — принимаем перемещение.
@@ -236,7 +239,7 @@ static func move_capsule(
                     test_position,
                     test_up,
                     &"move_binary",
-                    solid_cache
+                    cache
                 )
 
                 if test_collision:
@@ -766,7 +769,8 @@ static func resolve_capsule_collision(
     planet: Planet,
     world_position: Vector3,
     world_up: Vector3,
-    initial_collision: CollisionResult = null
+    initial_collision: CollisionResult = null,
+    solid_cache: Variant = null
 ) -> Vector3:
 
     var position := world_position
@@ -784,7 +788,8 @@ static func resolve_capsule_collision(
                 planet,
                 position,
                 world_up,
-                &"move_resolve"
+                &"move_resolve",
+                solid_cache
             )
 
         if not collision.collided:
