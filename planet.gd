@@ -5,13 +5,22 @@ var settings:
     get:
         return GameConfig.SETTINGS
 
+# Масштаб и цвет конкретного экземпляра мира.
+# -1 означает, что используются локальные настройки по умолчанию.
+var world_scale: int = -1
+var world_terrain_color: Color
+
 var SIZE: int:
     get:
-        return CHUNK_SIZE * settings.planet_scale
+        return CHUNK_SIZE * (
+            world_scale if world_scale > 0 else settings.planet_scale
+        )
 
 var RADIUS: float:
     get:
-        return 14.0 * settings.planet_scale
+        return 14.0 * (
+            world_scale if world_scale > 0 else settings.planet_scale
+        )
 
 const CHUNK_SIZE: int = 32
 const BLOCK_SIZE: float = 1.0
@@ -220,8 +229,10 @@ func _clear_temporary_section_faces(
 func _ready() -> void:
     add_to_group("planet")
 
+    world_terrain_color = settings.terrain_color
+
     terrain_material = StandardMaterial3D.new()
-    terrain_material.albedo_color = settings.terrain_color
+    terrain_material.albedo_color = world_terrain_color
     terrain_material.roughness = 1.0
     terrain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
@@ -1756,7 +1767,10 @@ Temporary sections: %d
         "sections": section_text
     }
 
-func configure_world(server_scale: int) -> bool:
+func configure_world(
+    server_scale: int,
+    server_terrain_color: Color
+) -> bool:
     if server_scale < 1 or server_scale > 1000:
         push_error("Invalid planet scale: %d" % server_scale)
         return false
@@ -1765,7 +1779,13 @@ func configure_world(server_scale: int) -> bool:
         push_error("Cannot configure planet after chunk loading!")
         return false
 
-    settings.planet_scale = server_scale
+    # Настраиваем только этот экземпляр планеты.
+    # Общий GameSettings ресурс не изменяется.
+    world_scale = server_scale
+    world_terrain_color = server_terrain_color
+
+    if is_instance_valid(terrain_material):
+        terrain_material.albedo_color = world_terrain_color
 
     last_center_chunk = Vector3i(
         -999999,
@@ -1775,7 +1795,7 @@ func configure_world(server_scale: int) -> bool:
 
     print(
         "WORLD CONFIG APPLIED | SCALE: ",
-        settings.planet_scale,
+        world_scale,
         " | SIZE: ",
         SIZE,
         " | RADIUS: ",
