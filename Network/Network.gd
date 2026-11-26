@@ -43,8 +43,8 @@ var input_sequence: int = 0
 # История вводов, которые ещё не подтверждены сервером.
 var pending_inputs: Array[Dictionary] = []
 
-# Локальные предсказания добычи до ответа сервера.
-# Vector2i(input_sequence, request_index) -> {cell, confirmed}
+# Локально найденная цель удара. На состояние мира не влияет.
+# Vector2i(input_sequence, request_index) -> {cell}
 var pending_mining_predictions: Dictionary = {}
 
 const INVALID_MINED_CELL := Vector3i(-1, -1, -1)
@@ -104,8 +104,6 @@ var diag_client_movement_max_usec: int = 0
 var diag_client_mine_requests: int = 0
 var diag_client_ray_usec: int = 0
 var diag_client_ray_max_usec: int = 0
-var diag_client_destroy_usec: int = 0
-var diag_client_destroy_max_usec: int = 0
 var diag_client_pending_inputs_max: int = 0
 var diag_client_pending_mining_max: int = 0
 
@@ -176,19 +174,16 @@ func _flush_mining_diagnostics() -> void:
 	else:
 		var client_movement_avg_ms := 0.0
 		var client_ray_avg_ms := 0.0
-		var client_destroy_avg_ms := 0.0
 		if diag_client_frames > 0:
 			client_movement_avg_ms = float(diag_client_movement_usec) / float(diag_client_frames) / 1000.0
 		if diag_client_mine_requests > 0:
 			client_ray_avg_ms = float(diag_client_ray_usec) / float(diag_client_mine_requests) / 1000.0
-			client_destroy_avg_ms = float(diag_client_destroy_usec) / float(diag_client_mine_requests) / 1000.0
 
 		print(
 			"DIAG CLIENT | frames: ", diag_client_frames,
 			" | movement avg/max ms: ", "%.3f" % client_movement_avg_ms, "/", "%.3f" % (float(diag_client_movement_max_usec) / 1000.0),
 			" | mine req: ", diag_client_mine_requests,
 			" | ray avg/max ms: ", "%.3f" % client_ray_avg_ms, "/", "%.3f" % (float(diag_client_ray_max_usec) / 1000.0),
-			" | destroy avg/max ms: ", "%.3f" % client_destroy_avg_ms, "/", "%.3f" % (float(diag_client_destroy_max_usec) / 1000.0),
 			" | pending input/mining max: ", diag_client_pending_inputs_max, "/", diag_client_pending_mining_max,
 			" | collision calls/cells/max ms: ", planet_stats.get("collision_calls", 0), "/", planet_stats.get("collision_cells", 0), "/", "%.3f" % (float(planet_stats.get("collision_max_usec", 0)) / 1000.0),
 			" | ray calls/steps max: ", planet_stats.get("ray_calls", 0), "/", planet_stats.get("ray_steps", 0), "/", planet_stats.get("ray_max_steps", 0),
@@ -215,8 +210,6 @@ func _flush_mining_diagnostics() -> void:
 	diag_client_mine_requests = 0
 	diag_client_ray_usec = 0
 	diag_client_ray_max_usec = 0
-	diag_client_destroy_usec = 0
-	diag_client_destroy_max_usec = 0
 	diag_client_pending_inputs_max = 0
 	diag_client_pending_mining_max = 0
 
@@ -705,8 +698,9 @@ func process_local_player(
 
 	player.velocity = local_velocity
 
-	# Предсказываем добычу локально, не ожидая ответа сервера.
-	# Сервер всё равно самостоятельно определит блок по своему состоянию.
+	# Локально определяем предполагаемую цель удара для сопоставления
+	# с ответом сервера. Не вызываем destroy_block(): коллизии и данные
+	# мира на клиенте меняются только после авторитетного RPC от сервера.
 	for request_index in range(mine_requests):
 		diag_client_mine_requests += 1
 		var predicted_cell := INVALID_MINED_CELL
@@ -723,7 +717,7 @@ func process_local_player(
 			var predicted_look := look_direction.normalized()
 
 			var ray_started_usec: int = Time.get_ticks_usec()
-			var candidate := current_planet.get_mined_cell(
+			predicted_cell = current_planet.get_mined_cell(
 				ray_origin,
 				predicted_look,
 				settings.mining_distance
@@ -732,22 +726,12 @@ func process_local_player(
 			diag_client_ray_usec += ray_elapsed_usec
 			diag_client_ray_max_usec = maxi(diag_client_ray_max_usec, ray_elapsed_usec)
 
-			if candidate != INVALID_MINED_CELL:
-				var destroy_started_usec: int = Time.get_ticks_usec()
-				var destroyed: bool = current_planet.destroy_block(candidate)
-				var destroy_elapsed_usec: int = Time.get_ticks_usec() - destroy_started_usec
-				diag_client_destroy_usec += destroy_elapsed_usec
-				diag_client_destroy_max_usec = maxi(diag_client_destroy_max_usec, destroy_elapsed_usec)
-				if destroyed:
-					predicted_cell = candidate
-
 		diag_client_pending_mining_max = maxi(diag_client_pending_mining_max, pending_mining_predictions.size() + 1)
 		pending_mining_predictions[Vector2i(
 			input_sequence,
 			request_index
 		)] = {
-			"cell": predicted_cell,
-			"confirmed": false
+			"cell": predicted_cell
 		}
 
 	# Отправляем ввод серверу.
@@ -886,20 +870,9 @@ func input_rejected(sequence: int) -> void:
 			remaining_inputs.append(frame)
 	pending_inputs = remaining_inputs
 
-	var current_planet := _get_planet()
 	for prediction_key in pending_mining_predictions.keys():
-		if prediction_key.x != sequence:
-			continue
-
-		var prediction: Dictionary = pending_mining_predictions[prediction_key]
-		var cell: Vector3i = prediction.get("cell", INVALID_MINED_CELL)
-		if (
-			current_planet != null
-			and cell != INVALID_MINED_CELL
-			and not bool(prediction.get("confirmed", false))
-		):
-			current_planet.restore_block(cell)
-		pending_mining_predictions.erase(prediction_key)
+		if prediction_key.x == sequence:
+			pending_mining_predictions.erase(prediction_key)
 
 
 func _is_finite_vector2(value: Vector2) -> bool:
@@ -1589,14 +1562,6 @@ func receive_block_destroyed(cell: Vector3i) -> void:
 	if current_planet == null:
 		return
 
-	# Если серверное событие совпало с нашим предсказанием,
-	# запоминаем подтверждение: откатывать этот блок уже нельзя.
-	for prediction_key in pending_mining_predictions.keys():
-		var prediction: Dictionary = pending_mining_predictions[prediction_key]
-		if prediction.get("cell", INVALID_MINED_CELL) == cell:
-			prediction["confirmed"] = true
-			pending_mining_predictions[prediction_key] = prediction
-
 	if not current_planet.is_block_destroyed(cell):
 		current_planet.destroy_block(cell)
 
@@ -1615,49 +1580,20 @@ func mining_result(
 		return
 
 	var prediction_key := Vector2i(sequence, request_index)
-	var predicted_cell := INVALID_MINED_CELL
-	var was_confirmed := false
+	pending_mining_predictions.erase(prediction_key)
 
-	if pending_mining_predictions.has(prediction_key):
-		var prediction: Dictionary = pending_mining_predictions[prediction_key]
-		predicted_cell = prediction.get("cell", INVALID_MINED_CELL)
-		was_confirmed = bool(prediction.get("confirmed", false))
-		pending_mining_predictions.erase(prediction_key)
-
-	# Сервер выбрал другой блок или отклонил удар.
-	if predicted_cell != server_cell:
-		if (
-			predicted_cell != INVALID_MINED_CELL
-			and not was_confirmed
-		):
-			current_planet.restore_block(predicted_cell)
-
-		if (
-			server_cell != INVALID_MINED_CELL
-			and not current_planet.is_block_destroyed(server_cell)
-		):
-			current_planet.destroy_block(server_cell)
-	elif (
+	# Только сервер определяет, какой блок действительно добыт.
+	# Если receive_block_destroyed ещё не пришёл, применяем результат здесь.
+	if (
 		server_cell != INVALID_MINED_CELL
 		and not current_planet.is_block_destroyed(server_cell)
 	):
-		# Подтверждение могло прийти раньше широковещательного события.
 		current_planet.destroy_block(server_cell)
 
 
 func _rollback_pending_mining_predictions() -> void:
-	var current_planet := _get_planet()
-
-	if current_planet != null:
-		for prediction_key in pending_mining_predictions:
-			var prediction: Dictionary = pending_mining_predictions[prediction_key]
-			var cell: Vector3i = prediction.get("cell", INVALID_MINED_CELL)
-			if (
-				cell != INVALID_MINED_CELL
-				and not bool(prediction.get("confirmed", false))
-			):
-				current_planet.restore_block(cell)
-
+	# Локальные цели ударов не меняют мир, поэтому при disconnect
+	# достаточно очистить ожидающие запросы.
 	pending_mining_predictions.clear()
 
 
