@@ -27,8 +27,12 @@ class ContactResult:
 static func is_capsule_blocked(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    diagnostic_phase: StringName = &"collision_other"
 ) -> bool:
+
+    var started_usec: int = Time.get_ticks_usec()
+    var tested_cells: int = 0
 
     if planet == null:
         return false
@@ -81,6 +85,7 @@ static func is_capsule_blocked(
     for x in range(min_cell.x, max_cell.x + 1):
         for y in range(min_cell.y, max_cell.y + 1):
             for z in range(min_cell.z, max_cell.z + 1):
+                tested_cells += 1
 
                 if not planet.is_solid(x, y, z):
                     continue
@@ -95,8 +100,18 @@ static func is_capsule_blocked(
                     block_max,
                     COLLISION_RADIUS
                 ):
+                    planet.record_collision_diagnostic(
+                        diagnostic_phase,
+                        tested_cells,
+                        Time.get_ticks_usec() - started_usec
+                    )
                     return true
 
+    planet.record_collision_diagnostic(
+        diagnostic_phase,
+        tested_cells,
+        Time.get_ticks_usec() - started_usec
+    )
     return false
 
 # Перемещает капсулу на заданное расстояние.
@@ -205,14 +220,14 @@ static func move_capsule(
                     test_position - planet_center
                 ).normalized()
 
-                var test_collision := get_capsule_collision(
+                var test_collision := is_capsule_blocked(
                     planet,
                     test_position,
                     test_up,
                     &"move_binary"
                 )
 
-                if test_collision.collided:
+                if test_collision:
                     high = middle
                 else:
                     low = middle
