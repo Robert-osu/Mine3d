@@ -797,14 +797,17 @@ func receive_world_snapshot(
 
 	last_received_server_tick = server_tick
 
-	var present_players: Dictionary = {}
 	var local_id := multiplayer.get_unique_id()
 
 	for id in states:
 		var player_id := int(id)
 		var state: Dictionary = states[id]
 
-		present_players[player_id] = true
+		# Снимки идут по отдельному unreliable-каналу и могут
+		# прийти уже после обновления списка игроков. Не доверяем
+		# одному лишь наличию ID в пакете состояния.
+		if player_id != local_id and not _is_peer_connected(player_id):
+			continue
 
 		# Нашего персонажа корректируем через reconciliation.
 		if player_id == local_id:
@@ -820,11 +823,6 @@ func receive_world_snapshot(
 
 		# Остальных игроков добавляем в историю снимков.
 		_add_remote_snapshot(player_id, state, server_tick)
-
-	# Удаляем персонажей, которых больше нет на сервере.
-	for id in remote_players.keys():
-		if not present_players.has(id):
-			_remove_remote_player(id)
 
 # ============================================================
 # CLIENT RECONCILIATION
@@ -1073,7 +1071,21 @@ func _broadcast_player_list() -> void:
 
 @rpc("authority", "call_remote", "reliable", 0)
 func sync_player_list(players: Dictionary) -> void:
-	connected_players = players.duplicate(true)
+	var updated_players: Dictionary = players.duplicate(true)
+
+	# Удаляем модели и историю снимков сразу после получения
+	# авторитетного списка подключённых игроков.
+	for player_id in remote_players.keys():
+		if not _player_list_has_id(updated_players, int(player_id)):
+			_remove_remote_player(int(player_id))
+
+	# История может существовать даже если шаблон игрока ещё
+	# не был зарегистрирован и модель не успела создаться.
+	for player_id in remote_snapshots.keys():
+		if not _player_list_has_id(updated_players, int(player_id)):
+			remote_snapshots.erase(player_id)
+
+	connected_players = updated_players
 
 	print("========== PLAYERS ONLINE ==========")
 
@@ -1087,6 +1099,16 @@ func sync_player_list(players: Dictionary) -> void:
 
 	print("====================================")
 
+
+func _player_list_has_id(player_list: Dictionary, player_id: int) -> bool:
+	# Поддерживаем как integer, так и string ключи на случай
+	# сериализации списка через сторонний транспорт.
+	return player_list.has(player_id) or player_list.has(str(player_id))
+
+
+func _is_peer_connected(player_id: int) -> bool:
+	return _player_list_has_id(connected_players, player_id)
+
 # ============================================================
 # REMOTE PLAYERS
 # ============================================================
@@ -1097,7 +1119,11 @@ func _add_remote_snapshot(
 	server_tick: int
 ) -> void:
 
-	_ensure_remote_player(player_id)
+	# Повторная защита на уровне добавления снимка: даже если
+	# функция будет вызвана из другого места, отключённый игрок
+	# не получит новую историю или модель.
+	if player_id == multiplayer.get_unique_id() or not _is_peer_connected(player_id):
+		return
 
 	var history: Array = remote_snapshots.get(player_id, [])
 
@@ -1120,6 +1146,10 @@ func _add_remote_snapshot(
 		history.pop_front()
 
 	remote_snapshots[player_id] = history
+
+	# Создаём модель только после проверки принадлежности ID
+	# актуальному списку и проверки самого снимка.
+	_ensure_remote_player(player_id)
 
 
 func _transport_tangent_heading(
@@ -1202,8 +1232,8 @@ func _interpolate_tangent_heading(
 
 
 func _ensure_remote_player(peer_id: int) -> void:
-	# Не создаём собственного удалённого персонажа.
-	if peer_id == multiplayer.get_unique_id():
+	# Не создаём собственного или уже отключённого персонажа.
+	if peer_id == multiplayer.get_unique_id() or not _is_peer_connected(peer_id):
 		return
 
 	# Проверяем существующего персонажа.
