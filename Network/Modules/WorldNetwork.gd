@@ -87,7 +87,7 @@ func request_world_sync() -> void:
     pending_players[sender_id] = pending
 
     var section_keys: Array = snapshot.keys()
-    section_keys.sort_custom(_sort_section_keys)
+    section_keys.sort_custom(Callable(self, "_sort_section_keys"))
 
     var batch_size: int = NetworkProtocol.WORLD_SYNC_SECTIONS_PER_BATCH
     var total_batches: int = int(ceili(float(section_keys.size()) / float(batch_size)))
