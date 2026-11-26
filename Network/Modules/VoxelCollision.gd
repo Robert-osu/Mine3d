@@ -226,42 +226,104 @@ static func _segment_intersects_box(
     radius: float
 ) -> bool:
 
-    var direction: Vector3 = point_b - point_a
-
-    # Ищем минимальное расстояние от отрезка до AABB.
-    # Функция расстояния выпуклая, поэтому используем
-    # двоичное приближение через тернарный поиск.
-    var left: float = 0.0
-    var right: float = 1.0
-
-    for i in range(24):
-        var t1: float = left + (right - left) / 3.0
-        var t2: float = right - (right - left) / 3.0
-
-        var p1: Vector3 = point_a + direction * t1
-        var p2: Vector3 = point_a + direction * t2
-
-        var d1: float = _point_box_distance_squared(
-            p1, box_min, box_max
-        )
-
-        var d2: float = _point_box_distance_squared(
-            p2, box_min, box_max
-        )
-
-        if d1 < d2:
-            right = t2
-        else:
-            left = t1
-
-    var closest_t: float = (left + right) * 0.5
-    var closest_point: Vector3 = point_a + direction * closest_t
+    var closest_point: Vector3 = _closest_segment_point_to_box(
+        point_a,
+        point_b,
+        box_min,
+        box_max
+    )
 
     var distance_squared: float = _point_box_distance_squared(
         closest_point, box_min, box_max
     )
 
     return distance_squared <= radius * radius
+
+
+# Находит точку отрезка с минимальным расстоянием до AABB.
+# Квадрат расстояния кусочно-квадратичен: его формула меняется
+# только там, где координата отрезка пересекает грань коробки.
+# Поэтому минимум можно найти точно, без 24 итераций тернарного поиска.
+static func _closest_segment_point_to_box(
+    point_a: Vector3,
+    point_b: Vector3,
+    box_min: Vector3,
+    box_max: Vector3
+) -> Vector3:
+
+    var direction: Vector3 = point_b - point_a
+    var breakpoints: Array[float] = [0.0, 1.0]
+
+    for axis in range(3):
+        var start_value: float = point_a[axis]
+        var axis_delta: float = direction[axis]
+
+        if absf(axis_delta) < 0.0000001:
+            continue
+
+        var min_t: float = (box_min[axis] - start_value) / axis_delta
+        var max_t: float = (box_max[axis] - start_value) / axis_delta
+
+        if min_t > 0.0 and min_t < 1.0:
+            breakpoints.append(min_t)
+        if max_t > 0.0 and max_t < 1.0:
+            breakpoints.append(max_t)
+
+    breakpoints.sort()
+
+    var best_t: float = 0.0
+    var best_distance_squared: float = _point_box_distance_squared(
+        point_a,
+        box_min,
+        box_max
+    )
+
+    for i in range(breakpoints.size() - 1):
+        var interval_start: float = breakpoints[i]
+        var interval_end: float = breakpoints[i + 1]
+        var midpoint: float = (interval_start + interval_end) * 0.5
+        var midpoint_point: Vector3 = point_a + direction * midpoint
+
+        var quadratic_a: float = 0.0
+        var quadratic_b: float = 0.0
+
+        for axis in range(3):
+            var boundary: float
+            var outside: bool = false
+
+            if midpoint_point[axis] < box_min[axis]:
+                boundary = box_min[axis]
+                outside = true
+            elif midpoint_point[axis] > box_max[axis]:
+                boundary = box_max[axis]
+                outside = true
+
+            if outside:
+                var offset: float = point_a[axis] - boundary
+                var slope: float = direction[axis]
+                quadratic_a += slope * slope
+                quadratic_b += offset * slope
+
+        var candidate_t: float = interval_start
+        if quadratic_a > 0.0000001:
+            candidate_t = clampf(
+                -quadratic_b / quadratic_a,
+                interval_start,
+                interval_end
+            )
+
+        var candidate_point: Vector3 = point_a + direction * candidate_t
+        var candidate_distance_squared: float = _point_box_distance_squared(
+            candidate_point,
+            box_min,
+            box_max
+        )
+
+        if candidate_distance_squared < best_distance_squared:
+            best_distance_squared = candidate_distance_squared
+            best_t = candidate_t
+
+    return point_a + direction * best_t
 
 
 # Квадрат расстояния от точки до AABB.
@@ -366,33 +428,12 @@ static func _get_segment_box_contact(
 
     var result := ContactResult.new()
 
-    var direction := point_b - point_a
-
-    # Ищем ближайшую точку отрезка к AABB.
-    var left := 0.0
-    var right := 1.0
-
-    for i in range(24):
-        var t1 := left + (right - left) / 3.0
-        var t2 := right - (right - left) / 3.0
-
-        var p1 := point_a + direction * t1
-        var p2 := point_a + direction * t2
-
-        var d1 := _point_box_distance_squared(
-            p1, box_min, box_max
-        )
-        var d2 := _point_box_distance_squared(
-            p2, box_min, box_max
-        )
-
-        if d1 < d2:
-            right = t2
-        else:
-            left = t1
-
-    var t := (left + right) * 0.5
-    var segment_point := point_a + direction * t
+    var segment_point: Vector3 = _closest_segment_point_to_box(
+        point_a,
+        point_b,
+        box_min,
+        box_max
+    )
 
     var box_point := segment_point.clamp(box_min, box_max)
 
