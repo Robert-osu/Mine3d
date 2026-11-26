@@ -51,9 +51,7 @@ func hello(version: int, requested_name: String) -> void:
         reject.rpc_id(sender_id, "Could not initialize world synchronization")
         return
 
-    print("PLAYER AUTHORIZED: ", clean_name, " ID: ", sender_id)
-
-    var server_scale: int = (
+        var server_scale: int = (
         current_planet.world_scale
         if current_planet.world_scale > 0
         else current_planet.settings.planet_scale
@@ -125,11 +123,7 @@ func welcome(
     Network.world_network.reset_client_sync(sync_id)
     Network.world_network.request_world_sync.rpc_id(1, sync_id)
 
-    print("WORLD CONFIG RECEIVED")
-    print("SYNCHRONIZING PLANET STATE...")
-
-
-# Сервер отклоняет подключение.
+        # Сервер отклоняет подключение.
 @rpc("authority", "call_remote", "reliable", 0)
 func reject(reason: String) -> void:
     print("JOIN REJECTED: ", reason)
