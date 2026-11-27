@@ -108,6 +108,7 @@ func _ready() -> void:
 	if "--server" in args:
 		bot_controller.configure_from_args(args)
 		start_server()
+		_start_server_console()
 	else:
 		start_client("127.0.0.1")
 
@@ -149,6 +150,71 @@ func start_server() -> void:
 		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 
 	multiplayer.multiplayer_peer = peer
+
+# Читает команды из stdin в отдельном потоке, чтобы не блокировать физику сервера.
+var server_console_thread: Thread
+
+
+func _start_server_console() -> void:
+	if OS.get_name() != "Linux":
+		push_warning("Server console input is currently supported on Linux only.")
+		return
+
+	server_console_thread = Thread.new()
+	var error := server_console_thread.start(_server_console_input_loop)
+	if error != OK:
+		push_warning("Could not start server console input: %s" % error)
+		server_console_thread = null
+		return
+
+	print("SERVER CONSOLE READY | USE: bot add [count]")
+
+
+func _server_console_input_loop() -> void:
+	var input := FileAccess.open("/dev/stdin", FileAccess.READ)
+	if input == null:
+		call_deferred("_on_server_console_input_unavailable")
+		return
+
+	while not input.eof_reached():
+		var command := input.get_line().strip_edges()
+		if not command.is_empty():
+			call_deferred("_handle_server_console_command", command)
+
+	input.close()
+
+
+func _on_server_console_input_unavailable() -> void:
+	push_warning("Could not read server console from /dev/stdin.")
+
+
+func _handle_server_console_command(command: String) -> void:
+	if not multiplayer.is_server():
+		return
+
+	var parts := command.split(" ", false)
+	if parts.size() < 2 or parts[0].to_lower() != "bot" or parts[1].to_lower() != "add":
+		print("SERVER CONSOLE | UNKNOWN COMMAND: %s | USE: bot add [count]" % command)
+		return
+
+	var count := 1
+	if parts.size() >= 3:
+		if not parts[2].is_valid_int():
+			print("SERVER CONSOLE | INVALID COUNT: %s" % parts[2])
+			return
+		count = parts[2].to_int()
+
+	if parts.size() > 3 or count < 1:
+		print("SERVER CONSOLE | USAGE: bot add [count]")
+		return
+
+	var added := 0
+	for index in range(count):
+		if bot_controller.create_bot_player() == 0:
+			break
+		added += 1
+
+	print("SERVER CONSOLE | BOTS ADDED: %d/%d" % [added, count])
 
 
 func _on_peer_connected(_id: int) -> void:
