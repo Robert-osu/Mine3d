@@ -498,7 +498,7 @@ func _simulate_server_player(
 # Первая проверка — один ряд. После него бот останавливается,
 # чтобы можно было проверить базовые действия до реализации квадрата.
 const BOT_TEST_ROW_LENGTH: int = 32
-const BOT_ACTION_INTERVAL_TICKS: int = 30
+const BOT_ACTION_INTERVAL_TICKS: int = 60
 const BOT_STEP_DISTANCE: float = 0.85
 const BOT_STEP_TIMEOUT_TICKS: int = 120
 
