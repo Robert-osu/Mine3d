@@ -433,6 +433,19 @@ func _simulate_server_player(
 		server_player.input_queue.clear()
 		return
 
+	# Боты пока стоят на месте и смотрят радиально внутрь планеты.
+	# Это позволяет добывать последовательные блоки под собой.
+	if server_player.is_bot:
+		server_player.move_input = Vector2.ZERO
+		server_player.buttons = 0
+		server_player.previous_buttons = 0
+		var planet_center := current_planet.to_global(
+			current_planet.get_planet_center()
+		)
+		server_player.look_direction = (
+			planet_center - server_player.position
+		).normalized()
+
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
 		current_planet,
@@ -452,6 +465,10 @@ func _simulate_server_player(
 
 	server_player.finish_tick()
 
+	if server_player.is_bot:
+		_update_bot_mining(server_player, current_planet)
+		return
+
 	# Добываем после применения состояния из input, содержащего удар.
 	var mine_requests: int = int(input_frame.get("mine_requests", 0))
 	var sequence: int = int(input_frame.get("sequence", -1))
@@ -467,6 +484,42 @@ func _simulate_server_player(
 			request_index,
 			mined_cell
 		)
+
+# Бот выбирает чанк под своей текущей поверхностной позицией и
+# добывает блоки по радиальной колонке внутрь планеты.
+# Один успешный или неуспешный запрос выполняется не чаще раза в секунду.
+const BOT_MINE_INTERVAL_TICKS: int = 60
+
+
+func _update_bot_mining(
+	bot: ServerPlayer,
+	current_planet: Planet
+) -> void:
+	if not bot.grounded:
+		return
+
+	if server_physics_tick < bot.next_bot_mine_tick:
+		return
+
+	bot.next_bot_mine_tick = server_physics_tick + BOT_MINE_INTERVAL_TICKS
+
+	var center := current_planet.to_global(
+		current_planet.get_planet_center()
+	)
+	var surface_direction := (bot.position - center).normalized()
+	var surface_point := center + surface_direction * current_planet.RADIUS
+	var surface_cell := current_planet.get_cell(surface_point)
+	var target_chunk := current_planet.index_to_chunk(surface_cell)
+
+	var mined_cell := _server_mine_block(bot, current_planet)
+	if mined_cell == INVALID_MINED_CELL:
+		return
+
+	print(
+		"BOT MINED BLOCK | ID: %d | CHUNK: %s | CELL: %s"
+		% [bot.peer_id, target_chunk, mined_cell]
+	)
+
 
 # ============================================================
 # CLIENT CONNECTION
