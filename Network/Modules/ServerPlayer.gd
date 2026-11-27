@@ -50,6 +50,15 @@ var grounded: bool = false
 # Следующий серверный тик, когда боту разрешено добыть блок.
 var next_bot_mine_tick: int = 0
 
+# Зафиксированная касательная система координат и прогресс раскопки 32x32.
+var bot_mining_frame_initialized: bool = false
+var bot_mining_center: Vector3 = Vector3.ZERO
+var bot_mining_up: Vector3 = Vector3.UP
+var bot_mining_forward: Vector3 = Vector3.FORWARD
+var bot_mining_right: Vector3 = Vector3.RIGHT
+var bot_mining_index: int = 0
+var bot_mining_layer: int = 0
+
 # Параметры движения.
 const MOVE_SPEED := 50.0
 const ACCELERATION := 20.0
