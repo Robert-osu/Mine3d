@@ -103,7 +103,7 @@ func _bot_step_forward(bot: ServerPlayer) -> void:
 	bot.move_input = Vector2(0.0, -1.0)
 
 
-func _prepare_bot_input(bot: ServerPlayer, current_planet: Planet) -> void:
+func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.buttons = 0
 	bot.previous_buttons = 0
 
@@ -119,7 +119,7 @@ func _prepare_bot_input(bot: ServerPlayer, current_planet: Planet) -> void:
 		bot.move_input = Vector2.ZERO
 
 
-func _update_bot_actions(bot: ServerPlayer, current_planet: Planet) -> void:
+func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 	if bot.bot_action_phase == BOT_PHASE_DONE:
 		return
 
