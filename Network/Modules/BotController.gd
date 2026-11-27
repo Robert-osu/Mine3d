@@ -146,7 +146,6 @@ func setup(network_node: Node) -> void:
 const BOT_ROW_LENGTH: int = 32
 const BOT_SQUARE_SIZE: int = 32
 const BOT_STEP_DISTANCE: float = 0.85
-const BOT_RETURN_TOLERANCE: float = 0.45
 const BOT_MIN_MINE_INTERVAL_TICKS: int = 60
 
 const BOT_PHASE_INITIAL_MINE: int = 0
@@ -496,26 +495,6 @@ func _bot_finish_step(
 	# Следующий блок добывается после секунды cooldown и подтверждения grounded.
 	bot.bot_action_phase = BOT_PHASE_WAIT_FORWARD_MINE
 	bot.move_input = Vector2.ZERO
-
-
-func _bot_steer_toward_row_start(
-	bot: ServerPlayer,
-	current_planet: Planet
-) -> void:
-	var up := surface_up(bot, current_planet)
-	var target_direction := (
-		bot.bot_row_start_position - bot.position
-	).slide(up).normalized()
-
-	if target_direction.length_squared() < 0.0001:
-		bot.move_input = Vector2.ZERO
-		return
-
-	# Серверная физика использует look_direction для расчёта forward.
-	# Поэтому обновляем и heading, и look_direction каждый тик возврата.
-	bot.heading = target_direction
-	bot.look_direction = target_direction
-	_bot_step_forward(bot)
 
 
 func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
