@@ -884,7 +884,7 @@ static func _support_ray_hits_open_face(
                         continue
 
                     var neighbour: Vector3i = cell + face_step
-                            if not _is_solid_cached(
+                    if not _is_solid_cached(
                         planet,
                         neighbour.x,
                         neighbour.y,
