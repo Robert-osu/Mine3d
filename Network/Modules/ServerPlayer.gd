@@ -57,6 +57,8 @@ var bot_steps_completed: int = 0
 var bot_row_start_position: Vector3 = Vector3.ZERO
 var bot_square_row_index: int = 0
 var bot_square_index: int = 0
+# Серверный тик последнего успешно разрушенного ботом блока.
+var bot_last_mine_tick: int = -1000000
 
 # Параметры движения.
 const MOVE_SPEED := 50.0
