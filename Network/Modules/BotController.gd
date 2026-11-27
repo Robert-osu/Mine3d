@@ -400,6 +400,7 @@ func _bot_start_first_row(bot: ServerPlayer, current_planet: Planet) -> void:
 		0,
 		bot.bot_square_forward_delta.x
 	)
+	bot.bot_row_forward_steps = 0
 	bot.bot_route_cell.y = bot.bot_mining_y
 
 	if _bot_has_block_ahead(bot, current_planet):
@@ -466,6 +467,7 @@ func _bot_finish_step(
 
 		bot.bot_row_start_position = bot.position
 		# Боковой шаг уже занял первый блок нового ряда.
+		bot.bot_row_forward_steps = 0
 		bot.bot_steps_completed = 1
 		_bot_look_forward(bot, current_planet)
 		bot.bot_action_phase = BOT_PHASE_WAIT_FORWARD_MINE
@@ -479,6 +481,7 @@ func _bot_finish_step(
 
 	# Шаг завершён физически: сдвигаем курсор ровно на одну клетку.
 	bot.bot_route_cell += bot.bot_square_forward_delta
+	bot.bot_row_forward_steps += 1
 	bot.bot_steps_completed += 1
 	print("BOT ACTION | STEP VERIFIED | ID: %d | STEP: %d/%d" % [
 		bot.peer_id,
@@ -608,7 +611,7 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 			if _bot_has_completed_step(bot):
 				bot.bot_route_cell -= bot.bot_square_forward_delta
 				bot.bot_return_steps_completed += 1
-				if bot.bot_return_steps_completed >= BOT_ROW_LENGTH:
+				if bot.bot_return_steps_completed >= bot.bot_row_forward_steps:
 					bot.move_input = Vector2.ZERO
 					print("BOT ROW | RETURN COMPLETE | ID: %d | STEPS: %d | TICKS: %d" % [
 						bot.peer_id,
