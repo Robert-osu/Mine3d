@@ -526,22 +526,23 @@ func _update_bot_mining(
 		bot.bot_mining_frame_initialized = true
 
 	var column_index := bot.bot_mining_index
-	var column_x := (column_index % BOT_MINE_SIDE) - BOT_MINE_SIDE / 2
-	var column_z := int(column_index / BOT_MINE_SIDE) - BOT_MINE_SIDE / 2
+	var column_x := float(column_index % BOT_MINE_SIDE) - BOT_MINE_HALF_EXTENT
+	var column_z := float(int(column_index / BOT_MINE_SIDE)) - BOT_MINE_HALF_EXTENT
 	var tangent_offset := (
-		bot.bot_mining_right * (float(column_x) - 0.5)
-		+ bot.bot_mining_forward * (float(column_z) - 0.5)
+		bot.bot_mining_right * column_x
+		+ bot.bot_mining_forward * column_z
 	)
+	var mining_layer := bot.bot_mining_layer
 
 	# Каждая колонка проецируется на сферическую поверхность.
 	# Луч начинается на глубине текущего слоя и направлен внутрь.
 	var column_direction := (
 		bot.bot_mining_up * current_planet.RADIUS + tangent_offset
 	).normalized()
-	var column_surface := center + column_direction * current_planet.RADIUS
+	var column_surface := bot.bot_mining_center + column_direction * current_planet.RADIUS
 	var ray_origin := (
 		column_surface
-		+ column_direction * (0.8 - float(bot.bot_mining_layer))
+		+ column_direction * (0.8 - float(mining_layer))
 	)
 	var mined_cell := current_planet.get_mined_cell(
 		ray_origin,
@@ -565,7 +566,7 @@ func _update_bot_mining(
 
 	print(
 		"BOT MINED BLOCK | ID: %d | LAYER: %d | CELL: %s"
-		% [bot.peer_id, bot.bot_mining_layer, mined_cell]
+		% [bot.peer_id, mining_layer, mined_cell]
 	)
 
 
