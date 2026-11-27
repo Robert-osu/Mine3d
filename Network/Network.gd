@@ -374,8 +374,6 @@ func _simulate_server_player(
 			server_player,
 			current_planet
 		)
-		if mined_cell != INVALID_MINED_CELL:
-
 		mining_result.rpc_id(
 			server_player.peer_id,
 			sequence,
