@@ -433,21 +433,9 @@ func _simulate_server_player(
 		server_player.input_queue.clear()
 		return
 
-	# Боты стоят на месте. Их heading задаёт горизонтальное направление
-	# квадрата добычи, а look_direction направлен по касательной плоскости.
+	# Бот формирует собственный input перед обычной серверной физикой.
 	if server_player.is_bot:
-		server_player.move_input = Vector2.ZERO
-		server_player.buttons = 0
-		server_player.previous_buttons = 0
-		var planet_center := current_planet.to_global(
-			current_planet.get_planet_center()
-		)
-		var bot_up := (server_player.position - planet_center).normalized()
-		var bot_forward := server_player.heading.slide(bot_up).normalized()
-		if bot_forward.length_squared() < 0.0001:
-			bot_forward = _get_tangent_fallback(bot_up)
-		server_player.heading = bot_forward
-		server_player.look_direction = bot_forward
+		_prepare_bot_input(server_player, current_planet)
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
@@ -469,7 +457,7 @@ func _simulate_server_player(
 	server_player.finish_tick()
 
 	if server_player.is_bot:
-		_update_bot_mining(server_player, current_planet)
+		_update_bot_actions(server_player, current_planet)
 		return
 
 	# Добываем после применения состояния из input, содержащего удар.
@@ -488,87 +476,167 @@ func _simulate_server_player(
 			mined_cell
 		)
 
-# Бот выкапывает горизонтальный квадрат 32x32 в собственной системе
-# координат. После обхода всех 1024 колонок начинает следующий слой внутрь.
-const BOT_MINE_INTERVAL_TICKS: int = 60
-const BOT_MINE_SIDE: int = 32
-const BOT_MINE_HALF_EXTENT: float = 15.5
+# ============================================================
+# BOT ACTIONS
+# ============================================================
+
+# Первая проверка — один ряд. После него бот останавливается,
+# чтобы можно было проверить базовые действия до реализации квадрата.
+const BOT_TEST_ROW_LENGTH: int = 32
+const BOT_ACTION_INTERVAL_TICKS: int = 30
+const BOT_STEP_DISTANCE: float = 0.85
+const BOT_STEP_TIMEOUT_TICKS: int = 120
+
+const BOT_PHASE_MINE_BELOW: int = 0
+const BOT_PHASE_MINE_FORWARD: int = 1
+const BOT_PHASE_STEP_FORWARD: int = 2
+const BOT_PHASE_DONE: int = 3
 
 
-func _update_bot_mining(
-	bot: ServerPlayer,
-	current_planet: Planet
-) -> void:
-	if not bot.grounded:
-		return
+func _bot_surface_up(bot: ServerPlayer, current_planet: Planet) -> Vector3:
+	var center := current_planet.to_global(current_planet.get_planet_center())
+	return (bot.position - center).normalized()
 
-	if server_physics_tick < bot.next_bot_mine_tick:
-		return
 
-	bot.next_bot_mine_tick = server_physics_tick + BOT_MINE_INTERVAL_TICKS
+# Действие: посмотреть под ноги.
+func _bot_look_down(bot: ServerPlayer, current_planet: Planet) -> void:
+	bot.look_direction = -_bot_surface_up(bot, current_planet)
 
-	var center := current_planet.to_global(
-		current_planet.get_planet_center()
-	)
-	var surface_up := (bot.position - center).normalized()
-	var forward := bot.heading.slide(surface_up).normalized()
+
+# Действие: посмотреть на блок впереди, немного опустив луч к его центру.
+func _bot_look_forward(bot: ServerPlayer, current_planet: Planet) -> void:
+	var up := _bot_surface_up(bot, current_planet)
+	var forward := bot.heading.slide(up).normalized()
 	if forward.length_squared() < 0.0001:
-		forward = _get_tangent_fallback(surface_up)
-	var right := surface_up.cross(forward).normalized()
+		forward = _get_tangent_fallback(up)
+	bot.heading = forward
+	bot.look_direction = (forward - up * 0.65).normalized()
 
-	# Фиксируем рамку один раз: все слои остаются точно друг над другом,
-	# даже если ориентация бота позднее немного изменится.
-	if not bot.bot_mining_frame_initialized:
-		bot.bot_mining_center = center + surface_up * current_planet.RADIUS
-		bot.bot_mining_up = surface_up
-		bot.bot_mining_forward = forward
-		bot.bot_mining_right = right
-		bot.bot_mining_frame_initialized = true
 
-	var column_index := bot.bot_mining_index
-	var column_x := float(column_index % BOT_MINE_SIDE) - BOT_MINE_HALF_EXTENT
-	var column_z := float(int(column_index / BOT_MINE_SIDE)) - BOT_MINE_HALF_EXTENT
-	var tangent_offset := (
-		bot.bot_mining_right * column_x
-		+ bot.bot_mining_forward * column_z
-	)
-	var mining_layer := bot.bot_mining_layer
+# Действия: повернуться на 90 градусов относительно локальной поверхности.
+func _bot_turn_right(bot: ServerPlayer, current_planet: Planet) -> void:
+	var up := _bot_surface_up(bot, current_planet)
+	var forward := bot.heading.slide(up).normalized()
+	if forward.length_squared() < 0.0001:
+		forward = _get_tangent_fallback(up)
+	bot.heading = forward.rotated(up, -PI * 0.5).normalized()
+	bot.look_direction = bot.heading
 
-	# Каждая колонка проецируется на сферическую поверхность.
-	# Луч начинается на глубине текущего слоя и направлен внутрь.
-	var column_direction := (
-		bot.bot_mining_up * current_planet.RADIUS + tangent_offset
-	).normalized()
-	var column_surface := bot.bot_mining_center + column_direction * current_planet.RADIUS
-	var ray_origin := (
-		column_surface
-		+ column_direction * (0.8 - float(mining_layer))
-	)
+
+func _bot_turn_left(bot: ServerPlayer, current_planet: Planet) -> void:
+	var up := _bot_surface_up(bot, current_planet)
+	var forward := bot.heading.slide(up).normalized()
+	if forward.length_squared() < 0.0001:
+		forward = _get_tangent_fallback(up)
+	bot.heading = forward.rotated(up, PI * 0.5).normalized()
+	bot.look_direction = bot.heading
+
+
+# Действие: разрушить блок, на который сейчас направлен взгляд.
+# Используется тот же DDA и тот же путь репликации, что и у игрока.
+func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
+	if not bot.grounded:
+		return false
+
+	var up := _bot_surface_up(bot, current_planet)
+	var ray_origin := bot.position + up * 0.15
+	var ray_direction := bot.look_direction.normalized()
 	var mined_cell := current_planet.get_mined_cell(
 		ray_origin,
-		-column_direction,
-		maxf(settings.mining_distance, 2.0)
+		ray_direction,
+		settings.mining_distance
 	)
 
-	bot.bot_mining_index += 1
-	if bot.bot_mining_index >= BOT_MINE_SIDE * BOT_MINE_SIDE:
-		bot.bot_mining_index = 0
-		bot.bot_mining_layer += 1
-
 	if mined_cell == INVALID_MINED_CELL:
-		return
+		print("BOT ACTION | MINE MISS | ID: %d | LOOK: %s" % [
+			bot.peer_id, ray_direction
+		])
+		return false
+
 	if not current_planet.destroy_block(mined_cell):
-		return
+		return false
 
 	if is_instance_valid(world_network):
 		world_network.queue_mined_cell(mined_cell)
 	receive_block_destroyed.rpc(mined_cell)
+	print("BOT ACTION | MINE | ID: %d | CELL: %s" % [bot.peer_id, mined_cell])
+	return true
 
-	print(
-		"BOT MINED BLOCK | ID: %d | LAYER: %d | CELL: %s"
-		% [bot.peer_id, mining_layer, mined_cell]
-	)
 
+# Действие: идти вперёд. Перемещение выполняется общей физикой ниже,
+# а не изменением позиции напрямую.
+func _bot_step_forward(bot: ServerPlayer) -> void:
+	bot.move_input = Vector2(0.0, -1.0)
+
+
+func _prepare_bot_input(bot: ServerPlayer, current_planet: Planet) -> void:
+	bot.buttons = 0
+	bot.previous_buttons = 0
+
+	var up := _bot_surface_up(bot, current_planet)
+	var forward := bot.heading.slide(up).normalized()
+	if forward.length_squared() < 0.0001:
+		forward = _get_tangent_fallback(up)
+	bot.heading = forward
+
+	if bot.bot_action_phase == BOT_PHASE_STEP_FORWARD:
+		_bot_step_forward(bot)
+	else:
+		bot.move_input = Vector2.ZERO
+
+
+func _update_bot_actions(bot: ServerPlayer, current_planet: Planet) -> void:
+	if bot.bot_action_phase == BOT_PHASE_DONE:
+		return
+
+	if bot.bot_action_phase == BOT_PHASE_STEP_FORWARD:
+		bot.bot_step_ticks += 1
+		var up := _bot_surface_up(bot, current_planet)
+		var travelled := (bot.position - bot.bot_step_start_position).dot(
+			bot.bot_step_forward
+		)
+		if travelled >= BOT_STEP_DISTANCE:
+			bot.move_input = Vector2.ZERO
+			bot.bot_steps_completed += 1
+			print("BOT ACTION | STEP COMPLETE | ID: %d | STEP: %d" % [
+				bot.peer_id, bot.bot_steps_completed
+			])
+			if bot.bot_steps_completed >= BOT_TEST_ROW_LENGTH:
+				bot.bot_action_phase = BOT_PHASE_DONE
+				print("BOT TEST ROW COMPLETE | ID: %d | STEPS: %d" % [
+					bot.peer_id, bot.bot_steps_completed
+				])
+			else:
+				bot.bot_action_phase = BOT_PHASE_MINE_BELOW
+				bot.bot_action_next_tick = server_physics_tick + BOT_ACTION_INTERVAL_TICKS
+		elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
+			bot.move_input = Vector2.ZERO
+			bot.bot_action_phase = BOT_PHASE_DONE
+			push_warning("BOT STEP TIMEOUT | ID: %d | DISTANCE: %.3f" % [
+				bot.peer_id, travelled
+			])
+		return
+
+	if not bot.grounded or server_physics_tick < bot.bot_action_next_tick:
+		return
+
+	bot.bot_action_next_tick = server_physics_tick + BOT_ACTION_INTERVAL_TICKS
+
+	match bot.bot_action_phase:
+		BOT_PHASE_MINE_BELOW:
+			_bot_look_down(bot, current_planet)
+			_bot_mine_looked_at(bot, current_planet)
+			bot.bot_action_phase = BOT_PHASE_MINE_FORWARD
+
+		BOT_PHASE_MINE_FORWARD:
+			_bot_look_forward(bot, current_planet)
+			_bot_mine_looked_at(bot, current_planet)
+			var up := _bot_surface_up(bot, current_planet)
+			bot.bot_step_forward = bot.heading.slide(up).normalized()
+			bot.bot_step_start_position = bot.position
+			bot.bot_step_ticks = 0
+			bot.bot_action_phase = BOT_PHASE_STEP_FORWARD
+			_bot_step_forward(bot)
 
 # ============================================================
 # CLIENT CONNECTION
