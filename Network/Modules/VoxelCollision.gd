@@ -101,10 +101,8 @@ static func is_capsule_blocked(
                     block_max,
                     COLLISION_RADIUS
                 ):
-                    )
                     return true
 
-    )
     return false
 
 # Перемещает капсулу на заданное расстояние.
@@ -718,7 +716,6 @@ static func get_capsule_collision(
         ).normalized()
         result.penetration = best_penetration
 
-    )
     return result
 
 # Проверяет опору независимо от того, какой контакт оказался самым глубоким.
@@ -799,14 +796,12 @@ static func has_capsule_support(
             local_up,
             ray_length,
             ray_step,
-            cache,
+            cache
         ):
             supported_samples += 1
             if supported_samples >= required_samples:
-                )
                 return true
 
-    )
     return false
 
 
@@ -820,7 +815,7 @@ static func _support_ray_hits_open_face(
     local_up: Vector3,
     ray_length: float,
     ray_step: float,
-    solid_cache: Variant,
+    solid_cache: Variant
 ) -> bool:
 
     var ray_direction: Vector3 = -local_up
@@ -889,7 +884,7 @@ static func _support_ray_hits_open_face(
                         continue
 
                     var neighbour: Vector3i = cell + face_step
-                    if not _is_solid_cached(
+                            if not _is_solid_cached(
                         planet,
                         neighbour.x,
                         neighbour.y,
