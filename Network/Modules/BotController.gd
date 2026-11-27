@@ -212,20 +212,50 @@ func _bot_is_block_mined(current_planet: Planet, cell: Vector3i) -> bool:
 	return not current_planet.is_solid(cell.x, cell.y, cell.z)
 
 
-# Проверяет наличие блока перед ботом. Отсутствие блока — не ошибка:
-# в этом случае бот может сразу переходить к физическому шагу.
-func _bot_has_block_ahead(bot: ServerPlayer, current_planet: Planet) -> bool:
-	var up := surface_up(bot, current_planet)
-	var ray_origin := bot.position + up * 0.15
-	var ray_direction := bot.look_direction.normalized()
-	var target_cell := current_planet.get_mined_cell(
-		ray_origin,
-		ray_direction,
-		network.settings.mining_distance
+# Возвращает ровно одну соседнюю клетку по направлению движения.
+# Не ищет блоки дальше через пустые клетки: каждая пустая клетка
+# всё равно должна быть пройдена отдельным физическим шагом.
+func _bot_get_forward_cell(
+	bot: ServerPlayer,
+	current_planet: Planet
+) -> Vector3i:
+	if bot.bot_mining_y < 0:
+		return INVALID_MINED_CELL
+
+	var local_position: Vector3 = current_planet.to_local(bot.position)
+	var local_forward: Vector3 = (
+		current_planet.to_local(bot.position + bot.heading.normalized())
+		- local_position
+	).normalized()
+
+	var cell := Vector3i(
+		floori(local_position.x),
+		bot.bot_mining_y,
+		floori(local_position.z)
 	)
+
+	# Ряды участка строятся по горизонтальным осям X/Z.
+	# Выбираем только одну соседнюю клетку, по доминирующей оси.
+	if absf(local_forward.x) >= absf(local_forward.z):
+		if is_zero_approx(local_forward.x):
+			return INVALID_MINED_CELL
+		cell.x += 1 if local_forward.x > 0.0 else -1
+	else:
+		cell.z += 1 if local_forward.z > 0.0 else -1
+
+	return cell
+
+
+# Проверяет только непосредственную соседнюю клетку на зафиксированном Y.
+func _bot_has_block_ahead(bot: ServerPlayer, current_planet: Planet) -> bool:
+	var target_cell := _bot_get_forward_cell(bot, current_planet)
 	return (
 		target_cell != INVALID_MINED_CELL
-		and target_cell.y == bot.bot_mining_y
+		and current_planet.is_solid(
+			target_cell.x,
+			target_cell.y,
+			target_cell.z
+		)
 	)
 
 
@@ -260,19 +290,25 @@ func _bot_has_completed_step(bot: ServerPlayer) -> bool:
 
 
 # Добывает блок перед ботом и подтверждает изменение состояния мира.
-func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
+func _bot_mine_looked_at(
+	bot: ServerPlayer,
+	current_planet: Planet,
+	target_cell: Vector3i = INVALID_MINED_CELL
+) -> bool:
 	# Добыча доступна только стоя на земле и не чаще одного раза в секунду.
 	if not bot.grounded or not _bot_mine_cooldown_elapsed(bot):
 		return false
 
-	var up := surface_up(bot, current_planet)
-	var ray_origin := bot.position + up * 0.15
-	var ray_direction := bot.look_direction.normalized()
-	var mined_cell := current_planet.get_mined_cell(
-		ray_origin,
-		ray_direction,
-		network.settings.mining_distance
-	)
+	var mined_cell := target_cell
+	if mined_cell == INVALID_MINED_CELL:
+		var up := surface_up(bot, current_planet)
+		var ray_origin := bot.position + up * 0.15
+		var ray_direction := bot.look_direction.normalized()
+		mined_cell = current_planet.get_mined_cell(
+			ray_origin,
+			ray_direction,
+			network.settings.mining_distance
+		)
 
 	if mined_cell == INVALID_MINED_CELL:
 		print("BOT ACTION | MINE MISS | ID: %d | LOOK: %s" % [
@@ -506,7 +542,8 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 					# Перед ботом уже пусто — пропускаем добычу и шагаем.
 					_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
 				elif _bot_mine_cooldown_elapsed(bot):
-					if not _bot_mine_looked_at(bot, current_planet):
+					var target_cell := _bot_get_forward_cell(bot, current_planet)
+					if not _bot_mine_looked_at(bot, current_planet, target_cell):
 						_bot_stop(bot, "FORWARD BLOCK COULD NOT BE MINED")
 						return
 					_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
@@ -518,7 +555,8 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 					# Соседняя клетка свободна — переходим в неё без добычи.
 					_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
 				elif _bot_mine_cooldown_elapsed(bot):
-					if not _bot_mine_looked_at(bot, current_planet):
+					var target_cell := _bot_get_forward_cell(bot, current_planet)
+					if not _bot_mine_looked_at(bot, current_planet, target_cell):
 						_bot_stop(bot, "NEXT ROW BLOCK COULD NOT BE MINED")
 						return
 					_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
@@ -526,7 +564,8 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 		BOT_PHASE_MINE_FORWARD:
 			_bot_look_forward(bot, current_planet)
 			if _bot_has_block_ahead(bot, current_planet):
-				if not _bot_mine_looked_at(bot, current_planet):
+				var target_cell := _bot_get_forward_cell(bot, current_planet)
+				if not _bot_mine_looked_at(bot, current_planet, target_cell):
 					_bot_stop(bot, "FORWARD BLOCK COULD NOT BE MINED")
 					return
 			_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
