@@ -127,7 +127,7 @@ func restore_orientation(
 	var previous_look: Vector3 = previous_orientation["look_direction"]
 	var look_tangent := previous_look.slide(previous_up)
 	var look_vertical := previous_look.dot(previous_up)
-	var transported_look := network._transport_tangent_heading(
+	var transported_look: Vector3 = network._transport_tangent_heading(
 		look_tangent,
 		previous_up,
 		up_after
