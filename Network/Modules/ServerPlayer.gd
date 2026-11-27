@@ -60,6 +60,7 @@ var bot_route_cell: Vector3i = Vector3i(-1, -1, -1)
 var bot_square_forward_delta: Vector3i = Vector3i.ZERO
 var bot_square_right_delta: Vector3i = Vector3i.ZERO
 var bot_return_steps_completed: int = 0
+var bot_row_forward_steps: int = 0
 # Зафиксированный уровень добычи в координатах вокселей планеты.
 var bot_mining_y: int = -1
 var bot_square_row_index: int = 0
