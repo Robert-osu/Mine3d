@@ -103,6 +103,7 @@ func spawn_configured_bots_if_needed() -> void:
 func capture_orientation(bot: ServerPlayer, current_planet: Planet) -> Dictionary:
 	return {
 		"heading": bot.heading,
+		"look_direction": bot.look_direction,
 		"up": surface_up(bot, current_planet)
 	}
 
@@ -112,12 +113,28 @@ func restore_orientation(
 	current_planet: Planet,
 	previous_orientation: Dictionary
 ) -> void:
+	var previous_up: Vector3 = previous_orientation["up"]
 	var up_after := surface_up(bot, current_planet)
+
 	bot.heading = network._transport_tangent_heading(
 		previous_orientation["heading"],
-		previous_orientation["up"],
+		previous_up,
 		up_after
 	)
+
+	# Переносим и взгляд по поверхности: сохраняем его наклон относительно
+	# локального горизонта, чтобы направление движения не дрейфовало на сфере.
+	var previous_look: Vector3 = previous_orientation["look_direction"]
+	var look_tangent := previous_look.slide(previous_up)
+	var look_vertical := previous_look.dot(previous_up)
+	var transported_look := network._transport_tangent_heading(
+		look_tangent,
+		previous_up,
+		up_after
+	)
+	bot.look_direction = (
+		transported_look + up_after * look_vertical
+	).normalized()
 
 
 func setup(network_node: Node) -> void:
@@ -477,6 +494,22 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 				bot.move_input = Vector2.ZERO
 				_bot_begin_next_row(bot, current_planet)
 			elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
+				print(
+					"BOT RETURN FAILED | ID: %d | DISTANCE: %.3f | "
+					+ "START: %s | CURRENT: %s | STEP START: %s | "
+					+ "STEP FORWARD: %s | HEADING: %s | LOOK: %s | TICKS: %d"
+					% [
+						bot.peer_id,
+						distance_to_row_start,
+						bot.bot_row_start_position,
+						bot.position,
+						bot.bot_step_start_position,
+						bot.bot_step_forward,
+						bot.heading,
+						bot.look_direction,
+						bot.bot_step_ticks
+					]
+				)
 				_bot_stop(bot, "COULD NOT RETURN TO ROW START")
 
 # ============================================================
