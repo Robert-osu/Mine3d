@@ -437,6 +437,13 @@ func _simulate_server_player(
 	if server_player.is_bot:
 		_prepare_bot_input(server_player, current_planet)
 
+	# Сохраняем ориентацию корпуса отдельно от взгляда: при look_down
+	# направление взгляда совпадает с гравитацией, но heading не должен сбрасываться.
+	var bot_heading_before := server_player.heading
+	var bot_up_before := Vector3.ZERO
+	if server_player.is_bot:
+		bot_up_before = _bot_surface_up(server_player, current_planet)
+
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
 		current_planet,
@@ -453,6 +460,14 @@ func _simulate_server_player(
 	server_player.velocity = result["velocity"]
 	server_player.heading = result["heading"]
 	server_player.grounded = result["grounded"]
+
+	if server_player.is_bot:
+		var bot_up_after := _bot_surface_up(server_player, current_planet)
+		server_player.heading = _transport_tangent_heading(
+			bot_heading_before,
+			bot_up_before,
+			bot_up_after
+		)
 
 	server_player.finish_tick()
 
@@ -591,7 +606,6 @@ func _update_bot_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 
 	if bot.bot_action_phase == BOT_PHASE_STEP_FORWARD:
 		bot.bot_step_ticks += 1
-		var up := _bot_surface_up(bot, current_planet)
 		var travelled := (bot.position - bot.bot_step_start_position).dot(
 			bot.bot_step_forward
 		)
