@@ -54,6 +54,9 @@ var bot_step_start_position: Vector3 = Vector3.ZERO
 var bot_step_forward: Vector3 = Vector3.FORWARD
 var bot_step_ticks: int = 0
 var bot_steps_completed: int = 0
+var bot_row_start_position: Vector3 = Vector3.ZERO
+var bot_square_row_index: int = 0
+var bot_square_index: int = 0
 
 # Параметры движения.
 const MOVE_SPEED := 50.0
