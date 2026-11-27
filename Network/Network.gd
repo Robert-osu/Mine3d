@@ -208,15 +208,15 @@ func _poll_server_command_file() -> void:
 	if not FileAccess.file_exists(SERVER_COMMAND_FILE):
 		return
 
-	var file_size := FileAccess.get_file_as_bytes(SERVER_COMMAND_FILE).size()
+	var input := FileAccess.open(SERVER_COMMAND_FILE, FileAccess.READ)
+	if input == null:
+		return
+
+	var file_size := input.get_length()
 	if file_size < _server_command_read_offset:
 		push_warning("Server command file was truncated; restarting its read position.")
 		_server_command_read_offset = 0
 		_save_server_command_offset()
-
-	var input := FileAccess.open(SERVER_COMMAND_FILE, FileAccess.READ)
-	if input == null:
-		return
 
 	input.seek(_server_command_read_offset)
 
