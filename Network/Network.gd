@@ -108,7 +108,8 @@ func _ready() -> void:
 	if "--server" in args:
 		bot_controller.configure_from_args(args)
 		start_server()
-		_start_server_console()
+		if multiplayer.is_server():
+			_start_server_console()
 	else:
 		start_client("127.0.0.1")
 
