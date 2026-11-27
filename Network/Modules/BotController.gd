@@ -399,6 +399,26 @@ func _bot_finish_step(
 	bot.move_input = Vector2.ZERO
 
 
+func _bot_steer_toward_row_start(
+	bot: ServerPlayer,
+	current_planet: Planet
+) -> void:
+	var up := surface_up(bot, current_planet)
+	var target_direction := (
+		bot.bot_row_start_position - bot.position
+	).slide(up).normalized()
+
+	if target_direction.length_squared() < 0.0001:
+		bot.move_input = Vector2.ZERO
+		return
+
+	# Серверная физика использует look_direction для расчёта forward.
+	# Поэтому обновляем и heading, и look_direction каждый тик возврата.
+	bot.heading = target_direction
+	bot.look_direction = target_direction
+	_bot_step_forward(bot)
+
+
 func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.buttons = 0
 	bot.previous_buttons = 0
@@ -409,10 +429,11 @@ func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
 		forward = network._get_tangent_fallback(up)
 	bot.heading = forward
 
-	if (
+	if bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START:
+		_bot_steer_toward_row_start(bot, current_planet)
+	elif (
 		bot.bot_action_phase == BOT_PHASE_STEP_FORWARD
 		or bot.bot_action_phase == BOT_PHASE_STEP_TO_NEXT_ROW
-		or bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START
 	):
 		_bot_step_forward(bot)
 	else:
@@ -479,14 +500,13 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 			var distance_to_row_start := bot.position.distance_to(
 				bot.bot_row_start_position
 			)
-			if (
-				_bot_position_changed(
-					bot.bot_step_start_position,
-					bot.position
-				)
-				and distance_to_row_start <= BOT_RETURN_TOLERANCE
-			):
+			if distance_to_row_start <= BOT_RETURN_TOLERANCE:
 				bot.move_input = Vector2.ZERO
+				print("BOT ROW | RETURN COMPLETE | ID: %d | DISTANCE: %.3f | TICKS: %d" % [
+					bot.peer_id,
+					distance_to_row_start,
+					bot.bot_step_ticks
+				])
 				_bot_begin_next_row(bot, current_planet)
 
 # ============================================================
