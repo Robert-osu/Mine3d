@@ -144,7 +144,6 @@ func start_server() -> void:
 
 	multiplayer.multiplayer_peer = peer
 
-	print("SERVER STARTED ON PORT ", settings.port)
 
 func _on_peer_connected(_id: int) -> void:
 	pass
@@ -403,11 +402,9 @@ func start_client(address: String) -> void:
 
 	multiplayer.multiplayer_peer = peer
 
-	print("CONNECTING TO SERVER: ", address)
 
 
 func _on_connected() -> void:
-	print("CONNECTED TO SERVER")
 
 	# Сохраняем существующий handshake.
 	if has_node("ConnectionNetwork"):
@@ -415,14 +412,14 @@ func _on_connected() -> void:
 
 
 func _on_connection_failed() -> void:
-	print("CONNECTION FAILED")
+	push_warning("Connection to server failed.")
 	_cleanup_client_connection()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	peer = null
 
 
 func _on_server_disconnected() -> void:
-	print("SERVER DISCONNECTED")
+	push_warning("Server disconnected.")
 	_cleanup_client_connection()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	peer = null
@@ -477,7 +474,6 @@ func register_local_player(player: CharacterBody3D) -> void:
 	input_sequence = 0
 	local_previous_buttons = 0
 
-	print("LOCAL PLAYER REGISTERED")
 
 	# Создаём удалённых игроков, snapshots которых уже пришли.
 	for peer_id in remote_snapshots.keys():
