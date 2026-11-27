@@ -494,22 +494,22 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 				bot.move_input = Vector2.ZERO
 				_bot_begin_next_row(bot, current_planet)
 			elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
-				print(
+				var return_diagnostic_format: String = (
 					"BOT RETURN FAILED | ID: %d | DISTANCE: %.3f | "
 					+ "START: %s | CURRENT: %s | STEP START: %s | "
 					+ "STEP FORWARD: %s | HEADING: %s | LOOK: %s | TICKS: %d"
-					% [
-						bot.peer_id,
-						distance_to_row_start,
-						bot.bot_row_start_position,
-						bot.position,
-						bot.bot_step_start_position,
-						bot.bot_step_forward,
-						bot.heading,
-						bot.look_direction,
-						bot.bot_step_ticks
-					]
 				)
+				print(return_diagnostic_format % [
+					bot.peer_id,
+					distance_to_row_start,
+					bot.bot_row_start_position,
+					bot.position,
+					bot.bot_step_start_position,
+					bot.bot_step_forward,
+					bot.heading,
+					bot.look_direction,
+					bot.bot_step_ticks
+				])
 				_bot_stop(bot, "COULD NOT RETURN TO ROW START")
 
 # ============================================================
