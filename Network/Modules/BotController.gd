@@ -300,10 +300,10 @@ func _bot_mine_looked_at(
 		return false
 
 	var mined_cell := target_cell
+	var ray_direction := bot.look_direction.normalized()
 	if mined_cell == INVALID_MINED_CELL:
 		var up := surface_up(bot, current_planet)
 		var ray_origin := bot.position + up * 0.15
-		var ray_direction := bot.look_direction.normalized()
 		mined_cell = current_planet.get_mined_cell(
 			ray_origin,
 			ray_direction,
