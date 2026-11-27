@@ -32,12 +32,9 @@ static func is_capsule_blocked(
     planet: Planet,
     world_position: Vector3,
     world_up: Vector3,
-    diagnostic_phase: StringName = &"collision_other",
     solid_cache: Variant = null
 ) -> bool:
 
-    var started_usec: int = Time.get_ticks_usec()
-    var tested_cells: int = 0
 
     if planet == null:
         return false
@@ -90,7 +87,6 @@ static func is_capsule_blocked(
     for x in range(min_cell.x, max_cell.x + 1):
         for y in range(min_cell.y, max_cell.y + 1):
             for z in range(min_cell.z, max_cell.z + 1):
-                tested_cells += 1
 
                 if not _is_solid_cached(planet, x, y, z, solid_cache):
                     continue
@@ -105,17 +101,9 @@ static func is_capsule_blocked(
                     block_max,
                     COLLISION_RADIUS
                 ):
-                    planet.record_collision_diagnostic(
-                        diagnostic_phase,
-                        tested_cells,
-                        Time.get_ticks_usec() - started_usec
                     )
                     return true
 
-    planet.record_collision_diagnostic(
-        diagnostic_phase,
-        tested_cells,
-        Time.get_ticks_usec() - started_usec
     )
     return false
 
@@ -153,8 +141,7 @@ static func move_capsule_legacy(
         planet,
         current_position,
         initial_up,
-        &"move_initial",
-        cache
+                cache
     )
 
     if initial_collision.collided:
@@ -204,8 +191,7 @@ static func move_capsule_legacy(
                 planet,
                 candidate,
                 candidate_up,
-                &"move_candidate",
-                cache
+                                cache
             )
 
             # Препятствий нет — принимаем перемещение.
@@ -238,8 +224,7 @@ static func move_capsule_legacy(
                     planet,
                     test_position,
                     test_up,
-                    &"move_binary",
-                    cache
+                                        cache
                 )
 
                 if test_collision:
@@ -288,7 +273,7 @@ static func move_capsule(
 
     # CCD не заменяет восстановление уже существующего проникновения.
     var initial := get_capsule_collision(
-        planet, position, up, &"sweep_initial", cache
+        planet, position, up, cache
     )
     if initial.collided:
         position = resolve_capsule_collision(
@@ -657,12 +642,9 @@ static func get_capsule_collision(
     planet: Planet,
     world_position: Vector3,
     world_up: Vector3,
-    diagnostic_phase: StringName = &"collision_other",
     solid_cache: Variant = null
 ) -> CollisionResult:
 
-    var started_usec: int = Time.get_ticks_usec()
-    var tested_cells: int = 0
     var result := CollisionResult.new()
 
     if planet == null:
@@ -710,7 +692,6 @@ static func get_capsule_collision(
     for x in range(min_cell.x, max_cell.x + 1):
         for y in range(min_cell.y, max_cell.y + 1):
             for z in range(min_cell.z, max_cell.z + 1):
-                tested_cells += 1
 
                 if not _is_solid_cached(planet, x, y, z, solid_cache):
                     continue
@@ -737,10 +718,6 @@ static func get_capsule_collision(
         ).normalized()
         result.penetration = best_penetration
 
-    planet.record_collision_diagnostic(
-        diagnostic_phase,
-        tested_cells,
-        Time.get_ticks_usec() - started_usec
     )
     return result
 
@@ -751,12 +728,9 @@ static func has_capsule_support(
     planet: Planet,
     world_position: Vector3,
     world_up: Vector3,
-    diagnostic_phase: StringName = &"support_other",
     solid_cache: Variant = null
 ) -> bool:
 
-    var started_usec: int = Time.get_ticks_usec()
-    var tested_cells: Array[int] = [0]
 
     if planet == null:
         return false
@@ -826,21 +800,12 @@ static func has_capsule_support(
             ray_length,
             ray_step,
             cache,
-            tested_cells
         ):
             supported_samples += 1
             if supported_samples >= required_samples:
-                planet.record_collision_diagnostic(
-                    diagnostic_phase,
-                    tested_cells[0],
-                    Time.get_ticks_usec() - started_usec
                 )
                 return true
 
-    planet.record_collision_diagnostic(
-        diagnostic_phase,
-        tested_cells[0],
-        Time.get_ticks_usec() - started_usec
     )
     return false
 
@@ -856,7 +821,6 @@ static func _support_ray_hits_open_face(
     ray_length: float,
     ray_step: float,
     solid_cache: Variant,
-    tested_cells: Array[int]
 ) -> bool:
 
     var ray_direction: Vector3 = -local_up
@@ -873,7 +837,6 @@ static func _support_ray_hits_open_face(
 
         if not visited_cells.has(cell):
             visited_cells[cell] = true
-            tested_cells[0] += 1
 
             if _is_solid_cached(
                 planet, cell.x, cell.y, cell.z, solid_cache
@@ -926,7 +889,6 @@ static func _support_ray_hits_open_face(
                         continue
 
                     var neighbour: Vector3i = cell + face_step
-                    tested_cells[0] += 1
                     if not _is_solid_cached(
                         planet,
                         neighbour.x,
@@ -1028,8 +990,7 @@ static func resolve_capsule_collision(
                 planet,
                 position,
                 world_up,
-                &"move_resolve",
-                solid_cache
+                                solid_cache
             )
 
         if not collision.collided:
