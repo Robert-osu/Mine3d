@@ -47,6 +47,9 @@ var input_queue: Array[Dictionary] = []
 
 var grounded: bool = false
 
+# Следующий серверный тик, когда боту разрешено добыть блок.
+var next_bot_mine_tick: int = 0
+
 # Параметры движения.
 const MOVE_SPEED := 50.0
 const ACCELERATION := 20.0
