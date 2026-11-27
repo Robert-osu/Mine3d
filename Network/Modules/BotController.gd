@@ -176,6 +176,35 @@ func _bot_turn_left(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.look_direction = bot.heading
 
 
+# Проверяет состояние конкретной ячейки после попытки добычи.
+# Проверка идёт по данным мира, а не только по результату destroy_block().
+func _bot_is_block_mined(current_planet: Planet, cell: Vector3i) -> bool:
+	return not current_planet.is_solid(cell.x, cell.y, cell.z)
+
+
+# Проверяет, что координаты игрока действительно изменились.
+func _bot_position_changed(
+	start_position: Vector3,
+	current_position: Vector3,
+	min_distance: float = 0.05
+) -> bool:
+	return start_position.distance_squared_to(current_position) >= min_distance * min_distance
+
+
+# Проверяет завершение шага по фактическому перемещению вдоль заданного направления.
+func _bot_has_completed_step(bot: ServerPlayer) -> bool:
+	if not _bot_position_changed(
+		bot.bot_step_start_position,
+		bot.position
+	):
+		return false
+
+	var travelled := (bot.position - bot.bot_step_start_position).dot(
+		bot.bot_step_forward
+	)
+	return travelled >= BOT_STEP_DISTANCE
+
+
 # Действие: разрушить блок, на который сейчас направлен взгляд.
 # Используется тот же DDA и тот же путь репликации, что и у игрока.
 func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
@@ -203,7 +232,14 @@ func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
 	if is_instance_valid(network.world_network):
 		network.world_network.queue_mined_cell(mined_cell)
 	network.receive_block_destroyed.rpc(mined_cell)
-	print("BOT ACTION | MINE | ID: %d | CELL: %s" % [bot.peer_id, mined_cell])
+
+	if not _bot_is_block_mined(current_planet, mined_cell):
+		push_warning("BOT MINE VERIFY FAILED | ID: %d | CELL: %s" % [
+			bot.peer_id, mined_cell
+		])
+		return false
+
+	print("BOT ACTION | MINE VERIFIED | ID: %d | CELL: %s" % [bot.peer_id, mined_cell])
 	return true
 
 
@@ -238,7 +274,7 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 		var travelled := (bot.position - bot.bot_step_start_position).dot(
 			bot.bot_step_forward
 		)
-		if travelled >= BOT_STEP_DISTANCE:
+		if _bot_has_completed_step(bot):
 			bot.move_input = Vector2.ZERO
 			bot.bot_steps_completed += 1
 			print("BOT ACTION | STEP COMPLETE | ID: %d | STEP: %d" % [
