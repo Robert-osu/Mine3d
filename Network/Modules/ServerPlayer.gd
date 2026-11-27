@@ -10,8 +10,11 @@ const COLLISION_RADIUS: float = VoxelCollision.COLLISION_RADIUS
 const COLLISION_HEIGHT: float = VoxelCollision.COLLISION_HEIGHT
 
 
-# Идентификатор сетевого соединения.
+# Идентификатор сетевого соединения или зарезервированный ID бота.
 var peer_id: int
+
+# Боты управляются сервером и не отключаются по таймауту клиентского ввода.
+var is_bot: bool = false
 
 # Положение и скорость персонажа.
 var position := Vector3.ZERO
