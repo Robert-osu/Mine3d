@@ -32,14 +32,6 @@ var peer: ENetMultiplayerPeer
 
 var player_name: String = "Player"
 
-# Боты используют зарезервированные отрицательные ID, не пересекающиеся с ENet peer ID.
-const BOT_ID_START: int = -1000000
-const MAX_CONFIGURED_BOTS: int = 32
-var next_bot_id: int = BOT_ID_START
-var configured_bot_count: int = 0
-var configured_bots_spawned: bool = false
-var bot_counter: int = 0
-
 var connected_players: Dictionary = {}
 var server_players: Dictionary = {}
 var spawn_slots: Dictionary = {}
@@ -114,23 +106,10 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 
 	if "--server" in args:
-		configured_bot_count = _get_configured_bot_count(args)
+		bot_controller.configure_from_args(args)
 		start_server()
 	else:
 		start_client("127.0.0.1")
-
-
-func _get_configured_bot_count(args: PackedStringArray) -> int:
-	for index in range(args.size()):
-		var argument: String = args[index]
-
-		if argument.begins_with("--bots="):
-			return clampi(argument.trim_prefix("--bots=").to_int(), 0, MAX_CONFIGURED_BOTS)
-
-		if argument == "--bots" and index + 1 < args.size():
-			return clampi(args[index + 1].to_int(), 0, MAX_CONFIGURED_BOTS)
-
-	return 0
 
 
 func _physics_process(delta: float) -> void:
@@ -320,76 +299,13 @@ func create_server_player(id: int) -> void:
 	server_players[id] = server_player
 
 
-# Создаёт серверного бота. Его ID отрицательный, поэтому он не может
-# совпасть с реальным ENet peer ID. Бот реплицируется как обычный игрок.
-func create_bot_player(requested_name: String = "") -> int:
-	if not multiplayer.is_server():
-		push_warning("Only the server can create bot players.")
-		return 0
-
-	var current_planet := _get_planet()
-	if current_planet == null:
-		push_error("Cannot create bot: planet not found.")
-		return 0
-
-	var active_bot_count := 0
-	for player_variant in server_players.values():
-		var existing_player: ServerPlayer = player_variant
-		if existing_player.is_bot:
-			active_bot_count += 1
-
-	if active_bot_count >= MAX_CONFIGURED_BOTS:
-		push_warning("Bot limit reached: %d" % MAX_CONFIGURED_BOTS)
-		return 0
-
-	while server_players.has(next_bot_id) or connected_players.has(next_bot_id):
-		next_bot_id -= 1
-
-	var bot_id := next_bot_id
-	next_bot_id -= 1
-
-	create_server_player(bot_id)
-	if not server_players.has(bot_id):
-		return 0
-
-	bot_counter += 1
-	var bot_name := requested_name.strip_edges()
-	if bot_name.is_empty():
-		bot_name = "Bot %d" % bot_counter
-	bot_name = bot_name.left(NetworkProtocol.MAX_PLAYER_NAME_LENGTH)
-
-	var bot: ServerPlayer = server_players[bot_id]
-	bot.is_bot = true
-	bot.look_direction = bot.heading
-
-	connected_players[bot_id] = {
-		"name": bot_name,
-		"is_bot": true
-	}
-
-	print("BOT PLAYER CREATED | ID: %d | NAME: %s" % [bot_id, bot_name])
-	_broadcast_player_list()
-	return bot_id
-
-
-func _spawn_configured_bots() -> void:
-	configured_bots_spawned = true
-
-	for index in range(configured_bot_count):
-		create_bot_player("Bot %d" % (index + 1))
-
-	if configured_bot_count > 0:
-		print("BOT PLAYERS READY | COUNT: %d" % configured_bot_count)
-
-
 func _server_physics_process(_delta: float) -> void:
 	var current_planet := _get_planet()
 
 	if current_planet == null:
 		return
 
-	if not configured_bots_spawned:
-		_spawn_configured_bots()
+	bot_controller.spawn_configured_bots_if_needed()
 
 	server_physics_tick += 1
 	snapshot_counter += 1
@@ -443,12 +359,13 @@ func _simulate_server_player(
 	if server_player.is_bot:
 		bot_controller.prepare_input(server_player, current_planet)
 
-	# Сохраняем ориентацию корпуса отдельно от взгляда: при look_down
-	# направление взгляда совпадает с гравитацией, но heading не должен сбрасываться.
-	var bot_heading_before := server_player.heading
-	var bot_up_before := Vector3.ZERO
+	# Сохраняем ориентацию бота, пока общий симулятор обновляет движение.
+	var bot_orientation: Dictionary = {}
 	if server_player.is_bot:
-		bot_up_before = bot_controller.surface_up(server_player, current_planet)
+		bot_orientation = bot_controller.capture_orientation(
+			server_player,
+			current_planet
+		)
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
@@ -468,11 +385,10 @@ func _simulate_server_player(
 	server_player.grounded = result["grounded"]
 
 	if server_player.is_bot:
-		var bot_up_after := bot_controller.surface_up(server_player, current_planet)
-		server_player.heading = _transport_tangent_heading(
-			bot_heading_before,
-			bot_up_before,
-			bot_up_after
+		bot_controller.restore_orientation(
+			server_player,
+			current_planet,
+			bot_orientation
 		)
 
 	server_player.finish_tick()
