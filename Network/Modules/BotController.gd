@@ -124,17 +124,20 @@ func setup(network_node: Node) -> void:
 	network = network_node
 
 
-# Первая проверка — один ряд. После него бот останавливается,
-# чтобы можно было проверить базовые действия до реализации квадрата.
-const BOT_TEST_ROW_LENGTH: int = 32
-const BOT_ACTION_INTERVAL_TICKS: int = 60
+# Полный алгоритм: 32 шага на ряд, возврат к началу,
+# переход на следующий ряд и бесконечное расширение квадратами 32x32.
+const BOT_ROW_LENGTH: int = 32
+const BOT_SQUARE_SIZE: int = 32
 const BOT_STEP_DISTANCE: float = 0.85
 const BOT_STEP_TIMEOUT_TICKS: int = 120
+const BOT_RETURN_TOLERANCE: float = 0.45
 
-const BOT_PHASE_MINE_BELOW: int = 0
+const BOT_PHASE_INITIAL_MINE: int = 0
 const BOT_PHASE_MINE_FORWARD: int = 1
 const BOT_PHASE_STEP_FORWARD: int = 2
-const BOT_PHASE_DONE: int = 3
+const BOT_PHASE_RETURN_TO_ROW_START: int = 3
+const BOT_PHASE_STEP_TO_NEXT_ROW: int = 4
+const BOT_PHASE_DONE: int = 5
 
 
 func surface_up(bot: ServerPlayer, current_planet: Planet) -> Vector3:
@@ -157,7 +160,6 @@ func _bot_look_forward(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.look_direction = (forward - up * 0.65).normalized()
 
 
-# Действия: повернуться на 90 градусов относительно локальной поверхности.
 func _bot_turn_right(bot: ServerPlayer, current_planet: Planet) -> void:
 	var up := surface_up(bot, current_planet)
 	var forward := bot.heading.slide(up).normalized()
@@ -176,8 +178,16 @@ func _bot_turn_left(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.look_direction = bot.heading
 
 
-# Проверяет состояние конкретной ячейки после попытки добычи.
-# Проверка идёт по данным мира, а не только по результату destroy_block().
+func _bot_turn_around(bot: ServerPlayer, current_planet: Planet) -> void:
+	var up := surface_up(bot, current_planet)
+	var forward := bot.heading.slide(up).normalized()
+	if forward.length_squared() < 0.0001:
+		forward = network._get_tangent_fallback(up)
+	bot.heading = forward.rotated(up, PI).normalized()
+	bot.look_direction = bot.heading
+
+
+# Проверяет, что конкретная ячейка действительно стала пустой.
 func _bot_is_block_mined(current_planet: Planet, cell: Vector3i) -> bool:
 	return not current_planet.is_solid(cell.x, cell.y, cell.z)
 
@@ -191,7 +201,7 @@ func _bot_position_changed(
 	return start_position.distance_squared_to(current_position) >= min_distance * min_distance
 
 
-# Проверяет завершение шага по фактическому перемещению вдоль заданного направления.
+# Проверяет завершение обычного шага по фактическому перемещению.
 func _bot_has_completed_step(bot: ServerPlayer) -> bool:
 	if not _bot_position_changed(
 		bot.bot_step_start_position,
@@ -205,8 +215,7 @@ func _bot_has_completed_step(bot: ServerPlayer) -> bool:
 	return travelled >= BOT_STEP_DISTANCE
 
 
-# Действие: разрушить блок, на который сейчас направлен взгляд.
-# Используется тот же DDA и тот же путь репликации, что и у игрока.
+# Добывает блок перед ботом и подтверждает изменение состояния мира.
 func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
 	if not bot.grounded:
 		return false
@@ -239,14 +248,139 @@ func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
 		])
 		return false
 
-	print("BOT ACTION | MINE VERIFIED | ID: %d | CELL: %s" % [bot.peer_id, mined_cell])
+	print("BOT ACTION | MINE VERIFIED | ID: %d | CELL: %s" % [
+		bot.peer_id, mined_cell
+	])
 	return true
 
 
-# Действие: идти вперёд. Перемещение выполняется общей физикой ниже,
-# а не изменением позиции напрямую.
+func _bot_stop(bot: ServerPlayer, reason: String) -> void:
+	bot.move_input = Vector2.ZERO
+	bot.bot_action_phase = BOT_PHASE_DONE
+	push_warning("BOT STOPPED | ID: %d | REASON: %s" % [
+		bot.peer_id, reason
+	])
+
+
+# Начинает один физический шаг в текущем направлении взгляда/движения.
+func _bot_begin_step(bot: ServerPlayer, phase: int) -> void:
+	var up := bot.heading.normalized()
+	bot.bot_step_forward = bot.heading.normalized()
+	bot.bot_step_start_position = bot.position
+	bot.bot_step_ticks = 0
+	bot.bot_action_phase = phase
+	_bot_step_forward(bot)
+
+
 func _bot_step_forward(bot: ServerPlayer) -> void:
 	bot.move_input = Vector2(0.0, -1.0)
+
+
+# После добычи блока под ногами немедленно добывает первый блок впереди.
+# Оба действия выполняются в одном серверном обновлении, чтобы бот
+# не успел провалиться до расчистки прохода перед собой.
+func _bot_start_first_row(bot: ServerPlayer, current_planet: Planet) -> void:
+	bot.bot_row_start_position = bot.position
+	_bot_look_forward(bot, current_planet)
+	if not _bot_mine_looked_at(bot, current_planet):
+		_bot_stop(bot, "FIRST FORWARD BLOCK WAS NOT MINED")
+		return
+
+	bot.bot_steps_completed = 0
+	_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+
+
+func _bot_begin_return(bot: ServerPlayer, current_planet: Planet) -> void:
+	bot.move_input = Vector2.ZERO
+	_bot_turn_around(bot, current_planet)
+	bot.bot_step_start_position = bot.position
+	bot.bot_step_ticks = 0
+	bot.bot_action_phase = BOT_PHASE_RETURN_TO_ROW_START
+	_bot_step_forward(bot)
+	print("BOT ROW | RETURNING | ID: %d | SQUARE: %d | ROW: %d" % [
+		bot.peer_id,
+		bot.bot_square_index + 1,
+		bot.bot_square_row_index + 1
+	])
+
+
+# После возвращения в начало ряда робот поворачивает направо,
+# выкапывает соседний блок, занимает его место и поворачивает налево.
+func _bot_begin_next_row(
+	bot: ServerPlayer,
+	current_planet: Planet
+) -> void:
+	bot.move_input = Vector2.ZERO
+	_bot_turn_around(bot, current_planet)
+	_bot_turn_right(bot, current_planet)
+	_bot_look_forward(bot, current_planet)
+
+	if not _bot_mine_looked_at(bot, current_planet):
+		_bot_stop(bot, "NEXT ROW BLOCK WAS NOT MINED")
+		return
+
+	bot.bot_steps_completed = 0
+	_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
+
+
+func _bot_finish_step(
+	bot: ServerPlayer,
+	current_planet: Planet
+) -> void:
+	bot.move_input = Vector2.ZERO
+
+	if not bot.grounded:
+		return
+
+	if bot.bot_action_phase == BOT_PHASE_STEP_TO_NEXT_ROW:
+		# Переход на соседний ряд завершён. Возвращаем исходное направление.
+		_bot_turn_left(bot, current_planet)
+		bot.bot_square_row_index += 1
+
+		if bot.bot_square_row_index >= BOT_SQUARE_SIZE:
+			bot.bot_square_index += 1
+			bot.bot_square_row_index = 0
+			print("BOT SQUARE COMPLETE | ID: %d | COMPLETED: %d | NEXT: %d | LEFT WALL: READY" % [
+				bot.peer_id,
+				bot.bot_square_index,
+				bot.bot_square_index + 1
+			])
+
+		bot.bot_row_start_position = bot.position
+		# Боковой шаг уже занял первый блок нового ряда.
+		bot.bot_steps_completed = 1
+		_bot_look_forward(bot, current_planet)
+
+		if not _bot_mine_looked_at(bot, current_planet):
+			_bot_stop(bot, "ROW FORWARD BLOCK WAS NOT MINED")
+			return
+
+		_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+		print("BOT ROW | STARTED | ID: %d | SQUARE: %d | ROW: %d" % [
+			bot.peer_id,
+			bot.bot_square_index + 1,
+			bot.bot_square_row_index + 1
+		])
+		return
+
+	bot.bot_steps_completed += 1
+	print("BOT ACTION | STEP VERIFIED | ID: %d | STEP: %d/%d" % [
+		bot.peer_id,
+		bot.bot_steps_completed,
+		BOT_ROW_LENGTH
+	])
+
+	if bot.bot_steps_completed >= BOT_ROW_LENGTH:
+		_bot_begin_return(bot, current_planet)
+		return
+
+	# Следующий блок ряда добывается только после подтверждённого шага.
+	_bot_look_forward(bot, current_planet)
+	if not _bot_mine_looked_at(bot, current_planet):
+		_bot_stop(bot, "FORWARD BLOCK WAS NOT MINED")
+		return
+
+	_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
 
 
 func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
@@ -259,7 +393,11 @@ func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
 		forward = network._get_tangent_fallback(up)
 	bot.heading = forward
 
-	if bot.bot_action_phase == BOT_PHASE_STEP_FORWARD:
+	if (
+		bot.bot_action_phase == BOT_PHASE_STEP_FORWARD
+		or bot.bot_action_phase == BOT_PHASE_STEP_TO_NEXT_ROW
+		or bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START
+	):
 		_bot_step_forward(bot)
 	else:
 		bot.move_input = Vector2.ZERO
@@ -269,52 +407,55 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 	if bot.bot_action_phase == BOT_PHASE_DONE:
 		return
 
-	if bot.bot_action_phase == BOT_PHASE_STEP_FORWARD:
-		bot.bot_step_ticks += 1
-		var travelled := (bot.position - bot.bot_step_start_position).dot(
-			bot.bot_step_forward
-		)
-		if _bot_has_completed_step(bot):
-			bot.move_input = Vector2.ZERO
-			bot.bot_steps_completed += 1
-			print("BOT ACTION | STEP COMPLETE | ID: %d | STEP: %d" % [
-				bot.peer_id, bot.bot_steps_completed
-			])
-			if bot.bot_steps_completed >= BOT_TEST_ROW_LENGTH:
-				bot.bot_action_phase = BOT_PHASE_DONE
-				print("BOT TEST ROW COMPLETE | ID: %d | STEPS: %d" % [
-					bot.peer_id, bot.bot_steps_completed
-				])
-			else:
-				bot.bot_action_phase = BOT_PHASE_MINE_BELOW
-				bot.bot_action_next_tick = network.server_physics_tick + BOT_ACTION_INTERVAL_TICKS
-		elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
-			bot.move_input = Vector2.ZERO
-			bot.bot_action_phase = BOT_PHASE_DONE
-			push_warning("BOT STEP TIMEOUT | ID: %d | DISTANCE: %.3f" % [
-				bot.peer_id, travelled
-			])
+	if not bot.grounded:
+		if (
+			bot.bot_action_phase == BOT_PHASE_STEP_FORWARD
+			or bot.bot_action_phase == BOT_PHASE_STEP_TO_NEXT_ROW
+			or bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START
+		):
+			bot.bot_step_ticks += 1
+			if bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
+				_bot_stop(bot, "MOVEMENT TIMEOUT WHILE AIRBORNE")
 		return
-
-	if not bot.grounded or network.server_physics_tick < bot.bot_action_next_tick:
-		return
-
-	bot.bot_action_next_tick = network.server_physics_tick + BOT_ACTION_INTERVAL_TICKS
 
 	match bot.bot_action_phase:
-		BOT_PHASE_MINE_BELOW:
+		BOT_PHASE_INITIAL_MINE:
 			_bot_look_down(bot, current_planet)
-			_bot_mine_looked_at(bot, current_planet)
-			bot.bot_action_phase = BOT_PHASE_MINE_FORWARD
+			if not _bot_mine_looked_at(bot, current_planet):
+				_bot_stop(bot, "BLOCK BELOW WAS NOT MINED")
+				return
+			print("BOT ACTION | BELOW BLOCK VERIFIED | ID: %d" % bot.peer_id)
+			_bot_start_first_row(bot, current_planet)
 
 		BOT_PHASE_MINE_FORWARD:
 			_bot_look_forward(bot, current_planet)
-			_bot_mine_looked_at(bot, current_planet)
-			var up := surface_up(bot, current_planet)
-			bot.bot_step_forward = bot.heading.slide(up).normalized()
-			bot.bot_step_start_position = bot.position
-			bot.bot_step_ticks = 0
-			bot.bot_action_phase = BOT_PHASE_STEP_FORWARD
-			_bot_step_forward(bot)
+			if not _bot_mine_looked_at(bot, current_planet):
+				_bot_stop(bot, "FORWARD BLOCK WAS NOT MINED")
+				return
+			_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+
+		BOT_PHASE_STEP_FORWARD, BOT_PHASE_STEP_TO_NEXT_ROW:
+			bot.bot_step_ticks += 1
+			if _bot_has_completed_step(bot):
+				_bot_finish_step(bot, current_planet)
+			elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
+				_bot_stop(bot, "STEP DISTANCE NOT REACHED")
+
+		BOT_PHASE_RETURN_TO_ROW_START:
+			bot.bot_step_ticks += 1
+			var distance_to_row_start := bot.position.distance_to(
+				bot.bot_row_start_position
+			)
+			if (
+				_bot_position_changed(
+					bot.bot_step_start_position,
+					bot.position
+				)
+				and distance_to_row_start <= BOT_RETURN_TOLERANCE
+			):
+				bot.move_input = Vector2.ZERO
+				_bot_begin_next_row(bot, current_planet)
+			elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
+				_bot_stop(bot, "COULD NOT RETURN TO ROW START")
 
 # ============================================================
