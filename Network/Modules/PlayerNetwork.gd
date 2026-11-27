@@ -87,16 +87,6 @@ func submit_input(
 		buttons
 	)
 
-	# Не засоряем консоль каждым пакетом.
-	if sequence % 60 == 0:
-		print(
-			"INPUT RECEIVED | ID: ", sender_id,
-			" | SEQUENCE: ", sequence,
-			" | MOVE: ", move_input,
-			" | LOOK: ", look_direction,
-			" | BUTTONS: ", buttons
-		)
-
 
 func broadcast_player_list() -> void:
 	if not multiplayer.is_server():
@@ -108,15 +98,3 @@ func broadcast_player_list() -> void:
 @rpc("authority", "call_remote", "reliable", 0)
 func sync_player_list(players: Dictionary) -> void:
 	visible_players = players.duplicate(true)
-
-	print("========== PLAYERS ONLINE ==========")
-
-	for id in visible_players:
-		var player_data: Dictionary = visible_players[id]
-
-		print(
-			"ID: ", id,
-			" | NAME: ", player_data["name"]
-		)
-
-	print("====================================")

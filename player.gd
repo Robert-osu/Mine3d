@@ -54,17 +54,17 @@ func _ready() -> void:
 
             await get_tree().process_frame
 
-    var surface_point := Network.get_player_spawn_surface_point(
+    var surface_point: Vector3 = Network.get_player_spawn_surface_point(
         planet,
         Network.local_spawn_slot
     )
-    var spawn_position := Network.get_player_spawn_position(
+    var spawn_position: Vector3 = Network.get_player_spawn_position(
         planet,
         Network.local_spawn_slot
     )
 
     var planet_center := planet.to_global(planet.get_planet_center())
-    var spawn_direction := (spawn_position - planet_center).normalized()
+    var spawn_direction: Vector3 = (spawn_position - planet_center).normalized()
 
     global_position = spawn_position
     planet.update_streaming(global_position)
@@ -82,7 +82,6 @@ func _ready() -> void:
                 " | Position: ",
                 spawn_position
             )
-            _log_spawn_diagnostics(surface_point, spawn_position)
             return
 
         await get_tree().process_frame
@@ -109,75 +108,6 @@ func _ready() -> void:
     camera.make_current()
 
     create_flashlight()
-
-func _log_spawn_diagnostics(
-    surface_point: Vector3,
-    spawn_position: Vector3
-) -> void:
-    var surface_cell: Vector3i = planet.get_cell(surface_point)
-    var spawn_cell: Vector3i = planet.get_cell(spawn_position)
-    var chunk_key: Vector3i = planet.index_to_chunk(surface_cell)
-
-    var chunk_exists: bool = planet.chunks.has(chunk_key)
-    var chunk_data: Dictionary = planet.chunks.get(chunk_key, {})
-    var generated: bool = bool(chunk_data.get("generated", false))
-    var pending_section_keys: Array = chunk_data.get(
-        "pending_section_keys",
-        []
-    )
-
-    var surface_solid: bool = planet.is_solid(
-        surface_cell.x,
-        surface_cell.y,
-        surface_cell.z
-    )
-    var surface_visible: bool = planet.is_block_visible(surface_cell)
-
-    print("========== PLAYER SPAWN DIAGNOSTICS ==========")
-    print("Spawn position: ", spawn_position)
-    print("Surface point: ", surface_point)
-    print("Spawn cell: ", spawn_cell)
-    print("Surface cell: ", surface_cell)
-    print(
-        "Surface block | SOLID: ",
-        surface_solid,
-        " | VISIBLE: ",
-        surface_visible,
-        " | COLLISION CHECK: ",
-        planet.has_collision_at(surface_point)
-    )
-    print(
-        "Target chunk: ",
-        chunk_key,
-        " | EXISTS: ",
-        chunk_exists,
-        " | GENERATED: ",
-        generated,
-        " | REQUEST ID: ",
-        chunk_data.get("request_id", -1),
-        " | ACTIVE REQUEST: ",
-        planet.active_chunk_requests.get(chunk_key, -1),
-        " | QUEUE INDEX: ",
-        planet.chunk_queue.find(chunk_key)
-    )
-    print(
-        "Target chunk pending sections: ",
-        pending_section_keys.size(),
-        " | BUILD CURSOR: ",
-        chunk_data.get("section_build_cursor", -1)
-    )
-    print(
-        "Streaming totals | LOADED CHUNKS: ",
-        planet.chunks.size(),
-        " | CHUNK QUEUE: ",
-        planet.chunk_queue.size(),
-        " | ACTIVE CHUNK REQUESTS: ",
-        planet.active_chunk_requests.size(),
-        " | WORKER TASKS: ",
-        planet.worker_task_ids.size()
-    )
-    print("===============================================")
-
 
 func _notification(what: int) -> void:
     if what == NOTIFICATION_APPLICATION_FOCUS_IN and not is_remote:
@@ -300,7 +230,7 @@ func _physics_process(delta: float) -> void:
     # Остаточная скорость при контакте с поверхностью не означает,
     # что игрок действительно движется. Для добычи учитываем ввод
     # направления и состояние опоры из предыдущего шага симуляции.
-    var is_moving := (
+    var is_moving: bool = (
         input.length_squared() > 0.01
         or not Network.local_grounded
     )

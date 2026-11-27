@@ -43,8 +43,8 @@ var input_sequence: int = 0
 # История вводов, которые ещё не подтверждены сервером.
 var pending_inputs: Array[Dictionary] = []
 
-# Локальные предсказания добычи до ответа сервера.
-# Vector2i(input_sequence, request_index) -> {cell, confirmed}
+# Локально найденная цель удара. На состояние мира не влияет.
+# Vector2i(input_sequence, request_index) -> {cell}
 var pending_mining_predictions: Dictionary = {}
 
 const INVALID_MINED_CELL := Vector3i(-1, -1, -1)
@@ -77,6 +77,10 @@ const MAX_INPUT_SEQUENCE_GAP: int = 120
 const INPUT_RATE_WINDOW_TICKS: int = 60
 const MAX_INPUT_RPCS_PER_WINDOW: int = 90
 
+# Защита от неограниченного ускорения падения и дорогого replay.
+const MAX_FALL_SPEED: float = 30.0
+const MAX_RECONCILIATION_REPLAY_INPUTS: int = 12
+const MAX_PENDING_INPUTS: int = 240
 
 # ============================================================
 # INITIALIZATION
@@ -140,15 +144,12 @@ func start_server() -> void:
 
 	multiplayer.multiplayer_peer = peer
 
-	print("SERVER STARTED ON PORT ", settings.port)
 
-func _on_peer_connected(id: int) -> void:
-	print("PLAYER CONNECTED: ", id, " — WAITING FOR HELLO")
+func _on_peer_connected(_id: int) -> void:
+	pass
 
 
 func _on_peer_disconnected(id: int) -> void:
-	print("PLAYER DISCONNECTED: ", id)
-
 	connected_players.erase(id)
 	server_players.erase(id)
 	spawn_slots.erase(id)
@@ -158,7 +159,6 @@ func _on_peer_disconnected(id: int) -> void:
 
 	if multiplayer.is_server():
 		_broadcast_player_list()
-
 
 # Все участники используют одну детерминированную раскладку спавнов.
 # Золотая спираль размещает игроков компактной группой вокруг северного полюса.
@@ -288,16 +288,9 @@ func create_server_player(id: int) -> void:
 	)
 
 	var server_player := ServerPlayer.new(id, spawn_position)
+	server_player.last_input_server_tick = server_physics_tick
 
 	server_players[id] = server_player
-
-	print(
-		"SERVER PLAYER CREATED | ID: ",
-		id,
-		" | POSITION: ",
-		spawn_position
-	)
-
 
 func _server_physics_process(_delta: float) -> void:
 	var current_planet := _get_planet()
@@ -324,6 +317,7 @@ func _server_physics_process(_delta: float) -> void:
 		_broadcast_player_states()
 
 
+
 func _simulate_server_player(
 	server_player: ServerPlayer,
 	current_planet: Planet,
@@ -342,8 +336,14 @@ func _simulate_server_player(
 		and server_physics_tick - server_player.last_input_server_tick
 			> INPUT_TIMEOUT_TICKS
 	):
+		# Клиент пропал или перестал присылать вводы.
+		# Не продолжаем бесконечно ронять его персонажа под действием гравитации.
 		server_player.move_input = Vector2.ZERO
 		server_player.buttons = 0
+		server_player.previous_buttons = 0
+		server_player.velocity = Vector3.ZERO
+		server_player.input_queue.clear()
+		return
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
@@ -373,7 +373,6 @@ func _simulate_server_player(
 			server_player,
 			current_planet
 		)
-
 		mining_result.rpc_id(
 			server_player.peer_id,
 			sequence,
@@ -403,11 +402,9 @@ func start_client(address: String) -> void:
 
 	multiplayer.multiplayer_peer = peer
 
-	print("CONNECTING TO SERVER: ", address)
 
 
 func _on_connected() -> void:
-	print("CONNECTED TO SERVER")
 
 	# Сохраняем существующий handshake.
 	if has_node("ConnectionNetwork"):
@@ -415,14 +412,14 @@ func _on_connected() -> void:
 
 
 func _on_connection_failed() -> void:
-	print("CONNECTION FAILED")
+	push_warning("Connection to server failed.")
 	_cleanup_client_connection()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	peer = null
 
 
 func _on_server_disconnected() -> void:
-	print("SERVER DISCONNECTED")
+	push_warning("Server disconnected.")
 	_cleanup_client_connection()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	peer = null
@@ -477,7 +474,6 @@ func register_local_player(player: CharacterBody3D) -> void:
 	input_sequence = 0
 	local_previous_buttons = 0
 
-	print("LOCAL PLAYER REGISTERED")
 
 	# Создаём удалённых игроков, snapshots которых уже пришли.
 	for peer_id in remote_snapshots.keys():
@@ -532,6 +528,8 @@ func process_local_player(
 
 	# Сохраняем ввод до подтверждения сервером.
 	pending_inputs.append(frame)
+	if pending_inputs.size() > MAX_PENDING_INPUTS:
+		pending_inputs.pop_front()
 
 	# Сразу выполняем локальное предсказание.
 	var result := _simulate_movement(
@@ -553,8 +551,9 @@ func process_local_player(
 
 	player.velocity = local_velocity
 
-	# Предсказываем добычу локально, не ожидая ответа сервера.
-	# Сервер всё равно самостоятельно определит блок по своему состоянию.
+	# Локально определяем предполагаемую цель удара для сопоставления
+	# с ответом сервера. Не вызываем destroy_block(): коллизии и данные
+	# мира на клиенте меняются только после авторитетного RPC от сервера.
 	for request_index in range(mine_requests):
 		var predicted_cell := INVALID_MINED_CELL
 
@@ -569,24 +568,17 @@ func process_local_player(
 			var ray_origin := player.global_position + up * 0.8
 			var predicted_look := look_direction.normalized()
 
-			var candidate := current_planet.get_mined_cell(
+			predicted_cell = current_planet.get_mined_cell(
 				ray_origin,
 				predicted_look,
 				settings.mining_distance
 			)
 
-			if (
-				candidate != INVALID_MINED_CELL
-				and current_planet.destroy_block(candidate)
-			):
-				predicted_cell = candidate
-
 		pending_mining_predictions[Vector2i(
 			input_sequence,
 			request_index
 		)] = {
-			"cell": predicted_cell,
-			"confirmed": false
+			"cell": predicted_cell
 		}
 
 	# Отправляем ввод серверу.
@@ -722,20 +714,9 @@ func input_rejected(sequence: int) -> void:
 			remaining_inputs.append(frame)
 	pending_inputs = remaining_inputs
 
-	var current_planet := _get_planet()
 	for prediction_key in pending_mining_predictions.keys():
-		if prediction_key.x != sequence:
-			continue
-
-		var prediction: Dictionary = pending_mining_predictions[prediction_key]
-		var cell: Vector3i = prediction.get("cell", INVALID_MINED_CELL)
-		if (
-			current_planet != null
-			and cell != INVALID_MINED_CELL
-			and not bool(prediction.get("confirmed", false))
-		):
-			current_planet.restore_block(cell)
-		pending_mining_predictions.erase(prediction_key)
+		if prediction_key.x == sequence:
+			pending_mining_predictions.erase(prediction_key)
 
 
 func _is_finite_vector2(value: Vector2) -> bool:
@@ -865,8 +846,18 @@ func _reconcile_player(
 
 	var previous_buttons := acknowledged_buttons
 
-	# Повторно проигрываем вводы, которые сервер ещё не подтвердил.
-	for frame in pending_inputs:
+	# Повторно проигрываем только последние вводы, которые сервер ещё
+	# не подтвердил. При сильном отставании это ограничивает стоимость
+	# reconciliation; сами вводы остаются в очереди до подтверждения.
+	var replay_start := maxi(
+		0,
+		pending_inputs.size() - MAX_RECONCILIATION_REPLAY_INPUTS
+	)
+	if replay_start > 0:
+		previous_buttons = int(pending_inputs[replay_start - 1]["buttons"])
+
+	for replay_index in range(replay_start, pending_inputs.size()):
+		var frame: Dictionary = pending_inputs[replay_index]
 		var result := _simulate_movement(
 			current_planet,
 			corrected_position,
@@ -911,19 +902,7 @@ func _reconcile_player(
 		old_position
 	)
 
-	# Разница нужна для диагностики.
-	var error_distance := old_position.distance_to(corrected_position)
-
-	if error_distance > settings.reconciliation_epsilon:
-		print(
-			"PLAYER RECONCILIATION | ERROR: ",
-			error_distance,
-			" | PENDING INPUTS: ",
-			pending_inputs.size()
-		)
-
-
-# ============================================================
+	# ============================================================
 # SHARED MOVEMENT SIMULATION
 # ============================================================
 
@@ -974,16 +953,18 @@ func _simulate_movement(
 			settings.acceleration * delta
 		)
 
-	# Проверяем контакт с поверхностью.
-	var ground_collision := VoxelCollision.get_capsule_collision(
+	# Общий кэш действует только в рамках этой симуляции одного тика.
+	# Проверки опоры и столкновений повторно используют уже прочитанные клетки.
+	var solid_cache: Dictionary = {}
+
+	# Проверяем опору по всем контактам капсулы.
+	# Самый глубокий контакт может оказаться боковой гранью блока,
+	# даже если другая часть капсулы уже опирается на поверхность.
+	var grounded := VoxelCollision.has_capsule_support(
 		current_planet,
 		current_position - up * 0.08,
-		up
-	)
-
-	var grounded := (
-		ground_collision.collided
-		and ground_collision.normal.dot(up) > 0.5
+		up,
+		solid_cache
 	)
 
 	# Проверяем нажатие прыжка.
@@ -998,7 +979,10 @@ func _simulate_movement(
 	elif grounded and vertical_speed < 0.0:
 		vertical_speed = 0.0
 	else:
-		vertical_speed -= settings.gravity * delta
+		vertical_speed = maxf(
+			vertical_speed - settings.gravity * delta,
+			-MAX_FALL_SPEED
+		)
 
 	var new_velocity := (
 		horizontal_velocity
@@ -1009,14 +993,16 @@ func _simulate_movement(
 	var new_position := VoxelCollision.move_capsule(
 		current_planet,
 		current_position,
-		new_velocity * delta
+		new_velocity * delta,
+		solid_cache
 	)
 
 	# Проверяем столкновение после перемещения.
 	var collision := VoxelCollision.get_capsule_collision(
 		current_planet,
 		new_position,
-		up
+		up,
+		solid_cache
 	)
 
 	# Если капсула уже выталкивается из стены,
@@ -1035,7 +1021,8 @@ func _simulate_movement(
 		collision = VoxelCollision.get_capsule_collision(
 			current_planet,
 			probe_position,
-			probe_up
+			probe_up,
+			solid_cache
 		)
 
 	# Убираем скорость, направленную внутрь препятствия.
@@ -1045,8 +1032,21 @@ func _simulate_movement(
 		if velocity_into_wall < 0.0:
 			new_velocity = new_velocity.slide(collision.normal)
 
-	# Определяем новое направление относительно поверхности.
+	# Повторно проверяем опору уже в конечной позиции.
+	# Это фиксирует приземление в текущем тике и не даёт гравитации
+	# каждый следующий тик вдавливать капсулу в край блока.
 	var new_up := (new_position - center).normalized()
+	grounded = VoxelCollision.has_capsule_support(
+		current_planet,
+		new_position - new_up * 0.08,
+		new_up,
+		solid_cache
+	)
+
+	if grounded:
+		var velocity_into_ground := new_velocity.dot(new_up)
+		if velocity_into_ground < 0.0:
+			new_velocity -= new_up * velocity_into_ground
 
 	var new_heading := forward.slide(new_up).normalized()
 
@@ -1087,17 +1087,6 @@ func sync_player_list(players: Dictionary) -> void:
 
 	connected_players = updated_players
 
-	print("========== PLAYERS ONLINE ==========")
-
-	for id in connected_players:
-		var player_data: Dictionary = connected_players[id]
-
-		print(
-			"ID: ", id,
-			" | NAME: ", player_data["name"]
-		)
-
-	print("====================================")
 
 
 func _player_list_has_id(player_list: Dictionary, player_id: int) -> bool:
@@ -1266,8 +1255,6 @@ func _ensure_remote_player(peer_id: int) -> void:
 
 	remote_players[peer_id] = remote_player
 
-	print("REMOTE PLAYER CREATED: ", peer_id)
-
 func _remove_remote_player(player_id: int) -> void:
 	if remote_players.has(player_id):
 		var remote_player: Node = remote_players[player_id]
@@ -1403,14 +1390,6 @@ func receive_block_destroyed(cell: Vector3i) -> void:
 	if current_planet == null:
 		return
 
-	# Если серверное событие совпало с нашим предсказанием,
-	# запоминаем подтверждение: откатывать этот блок уже нельзя.
-	for prediction_key in pending_mining_predictions.keys():
-		var prediction: Dictionary = pending_mining_predictions[prediction_key]
-		if prediction.get("cell", INVALID_MINED_CELL) == cell:
-			prediction["confirmed"] = true
-			pending_mining_predictions[prediction_key] = prediction
-
 	if not current_planet.is_block_destroyed(cell):
 		current_planet.destroy_block(cell)
 
@@ -1429,49 +1408,20 @@ func mining_result(
 		return
 
 	var prediction_key := Vector2i(sequence, request_index)
-	var predicted_cell := INVALID_MINED_CELL
-	var was_confirmed := false
+	pending_mining_predictions.erase(prediction_key)
 
-	if pending_mining_predictions.has(prediction_key):
-		var prediction: Dictionary = pending_mining_predictions[prediction_key]
-		predicted_cell = prediction.get("cell", INVALID_MINED_CELL)
-		was_confirmed = bool(prediction.get("confirmed", false))
-		pending_mining_predictions.erase(prediction_key)
-
-	# Сервер выбрал другой блок или отклонил удар.
-	if predicted_cell != server_cell:
-		if (
-			predicted_cell != INVALID_MINED_CELL
-			and not was_confirmed
-		):
-			current_planet.restore_block(predicted_cell)
-
-		if (
-			server_cell != INVALID_MINED_CELL
-			and not current_planet.is_block_destroyed(server_cell)
-		):
-			current_planet.destroy_block(server_cell)
-	elif (
+	# Только сервер определяет, какой блок действительно добыт.
+	# Если receive_block_destroyed ещё не пришёл, применяем результат здесь.
+	if (
 		server_cell != INVALID_MINED_CELL
 		and not current_planet.is_block_destroyed(server_cell)
 	):
-		# Подтверждение могло прийти раньше широковещательного события.
 		current_planet.destroy_block(server_cell)
 
 
 func _rollback_pending_mining_predictions() -> void:
-	var current_planet := _get_planet()
-
-	if current_planet != null:
-		for prediction_key in pending_mining_predictions:
-			var prediction: Dictionary = pending_mining_predictions[prediction_key]
-			var cell: Vector3i = prediction.get("cell", INVALID_MINED_CELL)
-			if (
-				cell != INVALID_MINED_CELL
-				and not bool(prediction.get("confirmed", false))
-			):
-				current_planet.restore_block(cell)
-
+	# Локальные цели ударов не меняют мир, поэтому при disconnect
+	# достаточно очистить ожидающие запросы.
 	pending_mining_predictions.clear()
 
 

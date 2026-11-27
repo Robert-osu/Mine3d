@@ -11,6 +11,12 @@ class_name VoxelCollision
 
 const COLLISION_RADIUS: float = 0.35
 const COLLISION_HEIGHT: float = 1.4
+const MAX_MOVE_STEPS: int = 16
+const BINARY_SEARCH_ITERATIONS: int = 3
+const SUPPORT_SAMPLE_COUNT: int = 13
+const SUPPORT_REQUIRED_SAMPLES: int = 7
+const SUPPORT_PROBE_DEPTH: float = 0.08
+const SUPPORT_FACE_TOLERANCE: float = 0.12
 
 class CollisionResult:
     var collided: bool = false
@@ -25,8 +31,10 @@ class ContactResult:
 static func is_capsule_blocked(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    solid_cache: Variant = null
 ) -> bool:
+
 
     if planet == null:
         return false
@@ -80,7 +88,7 @@ static func is_capsule_blocked(
         for y in range(min_cell.y, max_cell.y + 1):
             for z in range(min_cell.z, max_cell.z + 1):
 
-                if not planet.is_solid(x, y, z):
+                if not _is_solid_cached(planet, x, y, z, solid_cache):
                     continue
 
                 var block_min := Vector3(x, y, z) * planet.BLOCK_SIZE
@@ -100,10 +108,11 @@ static func is_capsule_blocked(
 # Перемещает капсулу на заданное расстояние.
 # Если встречает блок, останавливается перед ним.
 # Перемещает капсулу с обработкой столкновений и скольжения.
-static func move_capsule(
+static func move_capsule_legacy(
     planet: Planet,
     world_position: Vector3,
-    displacement: Vector3
+    displacement: Vector3,
+    solid_cache: Variant = null
 ) -> Vector3:
 
     if planet == null or displacement.length_squared() < 0.000001:
@@ -114,6 +123,11 @@ static func move_capsule(
     )
 
     var current_position := world_position
+    # Используем кэш вызывающей симуляции или создаём локальный,
+    # если move_capsule вызван самостоятельно.
+    var cache: Variant = solid_cache
+    if cache == null:
+        cache = {}
 
     # Если персонаж уже находится внутри блока,
     # сначала пытаемся устранить проникновение.
@@ -124,20 +138,33 @@ static func move_capsule(
     var initial_collision := get_capsule_collision(
         planet,
         current_position,
-        initial_up
+        initial_up,
+        cache
     )
 
     if initial_collision.collided:
         current_position = resolve_capsule_collision(
             planet,
             current_position,
-            initial_up
+            initial_up,
+            initial_collision,
+            cache
         )
 
-    # Ограничиваем размер одного шага.
+    # Ограничиваем размер шага и общее число шагов.
+    # Это защищает от аномально большого перемещения за один вызов.
     var max_step := COLLISION_RADIUS * 0.5
+    var max_distance := max_step * MAX_MOVE_STEPS
     var distance := displacement.length()
-    var steps := maxi(1, ceili(distance / max_step))
+
+    if distance > max_distance:
+        displacement = displacement * (max_distance / distance)
+        distance = max_distance
+
+    var steps := mini(
+        MAX_MOVE_STEPS,
+        maxi(1, ceili(distance / max_step))
+    )
 
     var step_vector := displacement / float(steps)
 
@@ -161,7 +188,8 @@ static func move_capsule(
             var collision := get_capsule_collision(
                 planet,
                 candidate,
-                candidate_up
+                candidate_up,
+                cache
             )
 
             # Препятствий нет — принимаем перемещение.
@@ -174,7 +202,11 @@ static func move_capsule(
             var low := 0.0
             var high := 1.0
 
-            for k in range(8):
+            # Три итерации дают шаг уточнения около 2.2 см
+            # при максимальном перемещении 0.175 м. low всегда
+            # указывает на проверенную безопасную позицию: мы можем
+            # остановиться чуть раньше, но не проходим сквозь блок.
+            for k in range(BINARY_SEARCH_ITERATIONS):
 
                 var middle := (low + high) * 0.5
 
@@ -186,13 +218,14 @@ static func move_capsule(
                     test_position - planet_center
                 ).normalized()
 
-                var test_collision := get_capsule_collision(
+                var test_collision := is_capsule_blocked(
                     planet,
                     test_position,
-                    test_up
+                    test_up,
+                    cache
                 )
 
-                if test_collision.collided:
+                if test_collision:
                     high = middle
                 else:
                     low = middle
@@ -216,6 +249,272 @@ static func move_capsule(
                 break
 
     return current_position
+
+# Новый путь движения: консервативное swept-продвижение капсулы.
+# Старый пошаговый алгоритм сохранён ниже в move_capsule_legacy().
+static func move_capsule(
+    planet: Planet,
+    world_position: Vector3,
+    displacement: Vector3,
+    solid_cache: Variant = null
+) -> Vector3:
+    if planet == null or displacement.length_squared() < 0.000001:
+        return world_position
+
+    var cache: Variant = solid_cache
+    if cache == null:
+        cache = {}
+
+    var planet_center: Vector3 = planet.to_global(planet.get_planet_center())
+    var position: Vector3 = world_position
+    var up: Vector3 = (position - planet_center).normalized()
+
+    # CCD не заменяет восстановление уже существующего проникновения.
+    var initial := get_capsule_collision(
+        planet, position, up, cache
+    )
+    if initial.collided:
+        position = resolve_capsule_collision(
+            planet, position, up, initial, cache
+        )
+
+    var remaining: Vector3 = displacement
+    var max_distance: float = COLLISION_RADIUS * 0.5 * MAX_MOVE_STEPS
+    if remaining.length() > max_distance:
+        remaining = remaining.normalized() * max_distance
+
+    # Несколько sweep-проходов позволяют скользить по стене,
+    # затем встретить вторую стену и остановиться в углу.
+    for slide_iteration in range(4):
+        var distance_left: float = remaining.length()
+        if distance_left < 0.00001:
+            break
+
+        var travel_bound: float = _swept_travel_bound(
+            position, remaining, planet_center
+        )
+        if travel_bound < 0.000001:
+            position += remaining
+            break
+
+        var fraction: float = 0.0
+        var hit_fraction: float = -1.0
+        var hit_normals: Array[Vector3] = []
+
+        # Conservative advancement: каждый шаг гарантированно не
+        # перескакивает через ближайшую поверхность при заданной
+        # верхней границе скорости изменения расстояния.
+        for sweep_iteration in range(24):
+            var test_position: Vector3 = position + remaining * fraction
+            var test_up: Vector3 = (test_position - planet_center).normalized()
+            var normals: Array[Vector3] = []
+            var separation: float = _get_capsule_separation(
+                planet, test_position, test_up, cache, normals
+            )
+
+            if separation <= 0.001:
+                hit_fraction = fraction
+                hit_normals = normals
+                break
+
+            if fraction >= 1.0:
+                break
+
+            var advance: float = separation / travel_bound
+            if advance <= 0.00001:
+                hit_fraction = fraction
+                hit_normals = normals
+                break
+
+            fraction = minf(1.0, fraction + advance * 0.9)
+
+        if hit_fraction < 0.0:
+            # Проверка конечной точки закрывает редкий случай, когда
+            # лимит итераций достигнут до t=1.
+            var end_position: Vector3 = position + remaining
+            var end_up: Vector3 = (end_position - planet_center).normalized()
+            var end_normals: Array[Vector3] = []
+            var end_separation: float = _get_capsule_separation(
+                planet, end_position, end_up, cache, end_normals
+            )
+            if end_separation > 0.001:
+                position = end_position
+                break
+            hit_fraction = fraction
+            hit_normals = end_normals
+
+        # Останавливаемся немного до поверхности, чтобы избежать
+        # дрожания из-за погрешностей float.
+        var safe_fraction: float = maxf(0.0, hit_fraction - 0.002)
+        position += remaining * safe_fraction
+        remaining *= 1.0 - safe_fraction
+
+        if hit_normals.is_empty():
+            break
+
+        # Проекция на пересечение полупространств всех контактов.
+        # Повторные проходы учитывают взаимное влияние нормалей угла.
+        var projected: Vector3 = remaining
+        for constraint_iteration in range(4):
+            var changed: bool = false
+            for normal in hit_normals:
+                var into_surface: float = projected.dot(normal)
+                if into_surface < -0.000001:
+                    projected -= normal * into_surface
+                    changed = true
+            if not changed:
+                break
+
+        if projected.length_squared() >= remaining.length_squared() - 0.0000001:
+            # Контакт может быть касательным (например, пол при ходьбе).
+            # Если движение не направлено внутрь поверхности, нельзя
+            # останавливать игрока: оставшаяся траектория безопасна.
+            position += remaining
+            break
+        remaining = projected
+
+    return position
+
+
+# Верхняя граница перемещения любой точки капсулы за t in [0, 1]:
+# поступательное перемещение плюс дуговое смещение концов осевого сегмента.
+static func _swept_travel_bound(
+    position: Vector3,
+    displacement: Vector3,
+    planet_center: Vector3
+) -> float:
+    var radial_distance: float = maxf(
+        0.1, position.distance_to(planet_center)
+    )
+    var angular_bound: float = displacement.length() / radial_distance
+    var half_segment: float = COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
+    return displacement.length() + half_segment * angular_bound
+
+
+# Возвращает минимальный зазор между капсулой и блоками.
+# В normals добавляются все контакты, находящиеся в пределах небольшого
+# допуска от ближайшей поверхности.
+static func _get_capsule_separation(
+    planet: Planet,
+    world_position: Vector3,
+    world_up: Vector3,
+    solid_cache: Variant,
+    normals: Array[Vector3]
+) -> float:
+    normals.clear()
+    if planet == null:
+        return INF
+
+    var local_position: Vector3 = planet.to_local(world_position)
+    var local_up: Vector3 = (
+        planet.global_transform.basis.inverse() * world_up
+    ).normalized()
+    var half_segment: float = COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
+    var point_a: Vector3 = local_position - local_up * half_segment
+    var point_b: Vector3 = local_position + local_up * half_segment
+    var margin: Vector3 = Vector3.ONE * (COLLISION_RADIUS + 0.01)
+
+    var bounds_min: Vector3 = Vector3(
+        minf(point_a.x, point_b.x),
+        minf(point_a.y, point_b.y),
+        minf(point_a.z, point_b.z)
+    ) - margin
+    var bounds_max: Vector3 = Vector3(
+        maxf(point_a.x, point_b.x),
+        maxf(point_a.y, point_b.y),
+        maxf(point_a.z, point_b.z)
+    ) + margin
+
+    var min_cell := Vector3i(
+        floori(bounds_min.x / planet.BLOCK_SIZE),
+        floori(bounds_min.y / planet.BLOCK_SIZE),
+        floori(bounds_min.z / planet.BLOCK_SIZE)
+    )
+    var max_cell := Vector3i(
+        floori(bounds_max.x / planet.BLOCK_SIZE),
+        floori(bounds_max.y / planet.BLOCK_SIZE),
+        floori(bounds_max.z / planet.BLOCK_SIZE)
+    )
+
+    var best_separation: float = INF
+    var contact_data: Array[Dictionary] = []
+
+    for x in range(min_cell.x, max_cell.x + 1):
+        for y in range(min_cell.y, max_cell.y + 1):
+            for z in range(min_cell.z, max_cell.z + 1):
+                if not _is_solid_cached(planet, x, y, z, solid_cache):
+                    continue
+
+                var box_min: Vector3 = Vector3(x, y, z) * planet.BLOCK_SIZE
+                var box_max: Vector3 = box_min + Vector3.ONE * planet.BLOCK_SIZE
+                var segment_point: Vector3 = _closest_segment_point_to_box(
+                    point_a, point_b, box_min, box_max
+                )
+                var box_point: Vector3 = segment_point.clamp(box_min, box_max)
+                var difference: Vector3 = segment_point - box_point
+                var distance: float = difference.length()
+                var separation: float = distance - COLLISION_RADIUS
+                var normal: Vector3
+
+                if distance > 0.00001:
+                    normal = difference / distance
+                else:
+                    var contact := _get_segment_box_contact(
+                        point_a, point_b, box_min, box_max, COLLISION_RADIUS
+                    )
+                    normal = contact.normal
+
+                if separation < best_separation:
+                    best_separation = separation
+
+                if normal.length_squared() > 0.0001:
+                    contact_data.append({
+                        "separation": separation,
+                        "normal": (
+                            planet.global_transform.basis * normal
+                        ).normalized()
+                    })
+
+    if best_separation == INF:
+        return INF
+
+    var contact_tolerance: float = maxf(0.003, planet.BLOCK_SIZE * 0.005)
+    for item in contact_data:
+        if float(item.separation) <= best_separation + contact_tolerance:
+            var candidate: Vector3 = item.normal
+            var duplicate: bool = false
+            for existing in normals:
+                if existing.dot(candidate) > 0.995:
+                    duplicate = true
+                    break
+            if not duplicate:
+                normals.append(candidate)
+
+    return best_separation
+
+
+# Повторные проверки одной ячейки внутри одного move_capsule()
+# используют результат первого обращения к планете.
+# При null сохраняется обычное поведение без кэширования.
+static func _is_solid_cached(
+    planet: Planet,
+    x: int,
+    y: int,
+    z: int,
+    solid_cache: Variant
+) -> bool:
+
+    if solid_cache == null:
+        return planet.is_solid(x, y, z)
+
+    var cell := Vector3i(x, y, z)
+    if solid_cache.has(cell):
+        return bool(solid_cache[cell])
+
+    var solid: bool = planet.is_solid(x, y, z)
+    solid_cache[cell] = solid
+    return solid
+
 
 # Проверяет расстояние между отрезком и AABB.
 static func _segment_intersects_box(
@@ -340,7 +639,8 @@ static func _point_box_distance_squared(
 static func get_capsule_collision(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    solid_cache: Variant = null
 ) -> CollisionResult:
 
     var result := CollisionResult.new()
@@ -391,7 +691,7 @@ static func get_capsule_collision(
         for y in range(min_cell.y, max_cell.y + 1):
             for z in range(min_cell.z, max_cell.z + 1):
 
-                if not planet.is_solid(x, y, z):
+                if not _is_solid_cached(planet, x, y, z, solid_cache):
                     continue
 
                 var box_min := Vector3(x, y, z) * planet.BLOCK_SIZE
@@ -424,75 +724,178 @@ static func get_capsule_collision(
 static func has_capsule_support(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    solid_cache: Variant = null
 ) -> bool:
+
 
     if planet == null:
         return false
 
     var up: Vector3 = world_up.normalized()
-    var local_position: Vector3 = planet.to_local(world_position)
+    if up.length_squared() < 0.0001:
+        return false
+
     var local_up: Vector3 = (
         planet.global_transform.basis.inverse() * up
     ).normalized()
+    if local_up.length_squared() < 0.0001:
+        return false
 
-    var half_segment: float = COLLISION_HEIGHT * 0.5 - COLLISION_RADIUS
-    var point_a: Vector3 = local_position - local_up * half_segment
-    var point_b: Vector3 = local_position + local_up * half_segment
-    var margin: Vector3 = Vector3.ONE * COLLISION_RADIUS
-
-    var bounds_min: Vector3 = Vector3(
-        minf(point_a.x, point_b.x),
-        minf(point_a.y, point_b.y),
-        minf(point_a.z, point_b.z)
-    ) - margin
-
-    var bounds_max: Vector3 = Vector3(
-        maxf(point_a.x, point_b.x),
-        maxf(point_a.y, point_b.y),
-        maxf(point_a.z, point_b.z)
-    ) + margin
-
-    var min_cell: Vector3i = Vector3i(
-        floori(bounds_min.x / planet.BLOCK_SIZE),
-        floori(bounds_min.y / planet.BLOCK_SIZE),
-        floori(bounds_min.z / planet.BLOCK_SIZE)
+    # world_position уже немного смещён вызывающей стороной вниз.
+    # Берём проекцию footprint в плоскости под нижним полюсом капсулы.
+    var foot_center: Vector3 = (
+        world_position - up * (COLLISION_HEIGHT * 0.5)
     )
 
-    var max_cell: Vector3i = Vector3i(
-        floori(bounds_max.x / planet.BLOCK_SIZE),
-        floori(bounds_max.y / planet.BLOCK_SIZE),
-        floori(bounds_max.z / planet.BLOCK_SIZE)
-    )
+    var reference_axis: Vector3 = Vector3.UP
+    if absf(up.dot(reference_axis)) > 0.95:
+        reference_axis = Vector3.RIGHT
 
-    for x in range(min_cell.x, max_cell.x + 1):
-        for y in range(min_cell.y, max_cell.y + 1):
-            for z in range(min_cell.z, max_cell.z + 1):
-                if not planet.is_solid(x, y, z):
-                    continue
+    var tangent_right: Vector3 = up.cross(reference_axis).normalized()
+    var tangent_forward: Vector3 = tangent_right.cross(up).normalized()
 
-                var box_min: Vector3 = Vector3(x, y, z) * planet.BLOCK_SIZE
-                var box_max: Vector3 = box_min + Vector3.ONE * planet.BLOCK_SIZE
-                var contact: ContactResult = _get_segment_box_contact(
-                    point_a,
-                    point_b,
-                    box_min,
-                    box_max,
-                    COLLISION_RADIUS
-                )
+    # Опора проверяется небольшой плоской площадкой радиусом 0.20 м.
+    # Это оставляет ограниченный свес за край блока, но не позволяет
+    # округлой нижней полусфере капсулы удерживать игрока на самом углу.
+    # Центральный луч + 16 равномерных проб по окружности.
+    var sample_offsets: Array[Vector2] = [Vector2.ZERO]
+    var support_radius: float = 0.20
 
-                if contact.penetration <= 0.0:
-                    continue
+    for i in range(16):
+        var angle: float = TAU * float(i) / 16.0
+        sample_offsets.append(
+            Vector2(cos(angle), sin(angle)) * support_radius
+        )
 
-                var world_normal: Vector3 = (
-                    planet.global_transform.basis * contact.normal
-                ).normalized()
+    var cache: Variant = solid_cache
+    if cache == null:
+        cache = {}
 
-                if world_normal.dot(up) > 0.5:
-                    return true
+    var supported_samples: int = 0
+    # Любая точка компактной площадки, имеющая опору, удерживает игрока.
+    # Как только вся площадка выходит за край, гравитация снова действует.
+    var required_samples: int = 1
+    var ray_start_height: float = 0.22 * planet.BLOCK_SIZE
+    var ray_length: float = 0.42 * planet.BLOCK_SIZE
+    var ray_step: float = 0.2 * planet.BLOCK_SIZE
+
+    for offset in sample_offsets:
+        var sample_world: Vector3 = (
+            foot_center
+            + tangent_right * offset.x
+            + tangent_forward * offset.y
+        )
+        var ray_start: Vector3 = planet.to_local(
+            sample_world + up * ray_start_height
+        )
+
+        if _support_ray_hits_open_face(
+            planet,
+            ray_start,
+            local_up,
+            ray_length,
+            ray_step,
+            cache
+        ):
+            supported_samples += 1
+            if supported_samples >= required_samples:
+                return true
 
     return false
 
+
+# Ищет пересечение короткого луча с открытой гранью блока.
+# Проверяем все возможные верхние грани, а не только dominant axis:
+# на сферической планете направление гравитации обычно диагональное
+# относительно локальных осей воксельной сетки.
+static func _support_ray_hits_open_face(
+    planet: Planet,
+    ray_start: Vector3,
+    local_up: Vector3,
+    ray_length: float,
+    ray_step: float,
+    solid_cache: Variant
+) -> bool:
+
+    var ray_direction: Vector3 = -local_up
+    var visited_cells: Dictionary = {}
+    var sample_distance: float = 0.0
+
+    while sample_distance <= ray_length + 0.0001:
+        var point: Vector3 = ray_start + ray_direction * sample_distance
+        var cell := Vector3i(
+            floori(point.x / planet.BLOCK_SIZE),
+            floori(point.y / planet.BLOCK_SIZE),
+            floori(point.z / planet.BLOCK_SIZE)
+        )
+
+        if not visited_cells.has(cell):
+            visited_cells[cell] = true
+
+            if _is_solid_cached(
+                planet, cell.x, cell.y, cell.z, solid_cache
+            ):
+                var block_min: Vector3 = Vector3(cell) * planet.BLOCK_SIZE
+                var block_max: Vector3 = block_min + Vector3.ONE * planet.BLOCK_SIZE
+
+                for axis in range(3):
+                    var up_component: float = local_up[axis]
+                    if absf(up_component) <= 0.5:
+                        continue
+
+                    var face_sign: float = signf(up_component)
+                    var face_step := Vector3i.ZERO
+                    face_step[axis] = int(face_sign)
+
+                    var face_coordinate: float
+                    if face_sign > 0.0:
+                        face_coordinate = block_max[axis]
+                    else:
+                        face_coordinate = block_min[axis]
+
+                    var direction_component: float = ray_direction[axis]
+                    if absf(direction_component) < 0.0001:
+                        continue
+
+                    var hit_distance: float = (
+                        face_coordinate - ray_start[axis]
+                    ) / direction_component
+
+                    if hit_distance < 0.0 or hit_distance > ray_length:
+                        continue
+
+                    var hit_point: Vector3 = (
+                        ray_start + ray_direction * hit_distance
+                    )
+
+                    var inside_face: bool = true
+                    for other_axis in range(3):
+                        if other_axis == axis:
+                            continue
+                        if (
+                            hit_point[other_axis] < block_min[other_axis] - 0.001
+                            or hit_point[other_axis] > block_max[other_axis] + 0.001
+                        ):
+                            inside_face = false
+                            break
+
+                    if not inside_face:
+                        continue
+
+                    var neighbour: Vector3i = cell + face_step
+                            if not _is_solid_cached(
+                        planet,
+                        neighbour.x,
+                        neighbour.y,
+                        neighbour.z,
+                        solid_cache
+                    ):
+                        return true
+
+        sample_distance += ray_step
+
+    return false
 
 static func _get_segment_box_contact(
     point_a: Vector3,
@@ -562,20 +965,28 @@ static func _get_segment_box_contact(
 static func resolve_capsule_collision(
     planet: Planet,
     world_position: Vector3,
-    world_up: Vector3
+    world_up: Vector3,
+    initial_collision: CollisionResult = null,
+    solid_cache: Variant = null
 ) -> Vector3:
 
     var position := world_position
+
+    # Первый контакт уже был рассчитан вызывающей функцией.
+    # Используем его, чтобы не сканировать ту же позицию повторно.
+    var collision: CollisionResult = initial_collision
 
     # Несколько проходов нужны, чтобы обработать углы,
     # где капсула одновременно касается нескольких блоков.
     for i in range(4):
 
-        var collision := get_capsule_collision(
-            planet,
-            position,
-            world_up
-        )
+        if collision == null:
+            collision = get_capsule_collision(
+                planet,
+                position,
+                world_up,
+                solid_cache
+            )
 
         if not collision.collided:
             break
@@ -583,6 +994,7 @@ static func resolve_capsule_collision(
         position += collision.normal * (
             collision.penetration + 0.001
         )
+        collision = null
 
     return position
 

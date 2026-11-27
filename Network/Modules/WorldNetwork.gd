@@ -297,10 +297,7 @@ func confirm_world_sync(sync_id: int) -> void:
 	var spawn_slot: int = int(Network.spawn_slots.get(sender_id, 1))
 	world_sync_accepted.rpc_id(sender_id, sync_id, spawn_slot)
 
-	print("PLAYER WORLD SYNC COMPLETE: ", sender_id)
-
-
-# Сервер подтверждает завершение синхронизации.
+	# Сервер подтверждает завершение синхронизации.
 @rpc("authority", "call_remote", "reliable", 0)
 func world_sync_accepted(sync_id: int, spawn_slot: int) -> void:
 	if multiplayer.is_server() or sync_id != client_sync_id:
@@ -309,6 +306,4 @@ func world_sync_accepted(sync_id: int, spawn_slot: int) -> void:
 	Network.local_spawn_slot = maxi(spawn_slot, 0)
 	Network.connection_network.connected = true
 
-	print("JOIN ACCEPTED")
-	print("MY NETWORK ID: ", multiplayer.get_unique_id())
-	print("CONNECTED TO SERVER WORLD")
+			
