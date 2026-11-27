@@ -212,38 +212,45 @@ func _bot_is_block_mined(current_planet: Planet, cell: Vector3i) -> bool:
 	return not current_planet.is_solid(cell.x, cell.y, cell.z)
 
 
-# Возвращает ровно одну соседнюю клетку по направлению движения.
-# Не ищет блоки дальше через пустые клетки: каждая пустая клетка
-# всё равно должна быть пройдена отдельным физическим шагом.
-func _bot_get_forward_cell(
+# Преобразует направление движения в один шаг по сетке X/Z планеты.
+# Направление фиксируется в начале квадрата и не пересчитывается по позиции капсулы.
+func _bot_get_grid_delta(
 	bot: ServerPlayer,
-	current_planet: Planet
+	current_planet: Planet,
+	direction: Vector3
 ) -> Vector3i:
-	if bot.bot_mining_y < 0:
-		return INVALID_MINED_CELL
-
 	var local_position: Vector3 = current_planet.to_local(bot.position)
-	var local_forward: Vector3 = (
-		current_planet.to_local(bot.position + bot.heading.normalized())
+	var local_direction: Vector3 = (
+		current_planet.to_local(bot.position + direction.normalized())
 		- local_position
 	).normalized()
 
-	var cell := Vector3i(
-		floori(local_position.x),
-		bot.bot_mining_y,
-		floori(local_position.z)
-	)
+	if absf(local_direction.x) >= absf(local_direction.z):
+		if is_zero_approx(local_direction.x):
+			return Vector3i.ZERO
+		return Vector3i(1 if local_direction.x > 0.0 else -1, 0, 0)
 
-	# Ряды участка строятся по горизонтальным осям X/Z.
-	# Выбираем только одну соседнюю клетку, по доминирующей оси.
-	if absf(local_forward.x) >= absf(local_forward.z):
-		if is_zero_approx(local_forward.x):
-			return INVALID_MINED_CELL
-		cell.x += 1 if local_forward.x > 0.0 else -1
-	else:
-		cell.z += 1 if local_forward.z > 0.0 else -1
+	if is_zero_approx(local_direction.z):
+		return Vector3i.ZERO
+	return Vector3i(0, 0, 1 if local_direction.z > 0.0 else -1)
 
-	return cell
+
+# Следующая цель берётся из целочисленного маршрута, а не из позиции игрока.
+func _bot_get_forward_cell(
+	bot: ServerPlayer,
+	_current_planet: Planet
+) -> Vector3i:
+	if bot.bot_mining_y < 0 or bot.bot_route_cell == INVALID_MINED_CELL:
+		return INVALID_MINED_CELL
+
+	var step_delta := bot.bot_square_forward_delta
+	if bot.bot_action_phase == BOT_PHASE_WAIT_NEXT_ROW_MINE:
+		step_delta = bot.bot_square_right_delta
+
+	if step_delta == Vector3i.ZERO:
+		return INVALID_MINED_CELL
+
+	return bot.bot_route_cell + step_delta
 
 
 # Проверяет только непосредственную соседнюю клетку на зафиксированном Y.
@@ -339,6 +346,7 @@ func _bot_mine_looked_at(
 
 	if bot.bot_mining_y < 0:
 		bot.bot_mining_y = mined_cell.y
+		bot.bot_route_cell = mined_cell
 		print("BOT ROW | MINING LEVEL LOCKED | ID: %d | Y: %d" % [
 			bot.peer_id, bot.bot_mining_y
 		])
@@ -377,6 +385,23 @@ func _bot_start_first_row(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.bot_row_start_position = bot.position
 	_bot_look_forward(bot, current_planet)
 
+	bot.bot_square_forward_delta = _bot_get_grid_delta(
+		bot,
+		current_planet,
+		bot.heading
+	)
+	if bot.bot_square_forward_delta == Vector3i.ZERO:
+		_bot_stop(bot, "COULD NOT ESTABLISH GRID DIRECTION")
+		return
+
+	# Поворот направо в координатах X/Z: (x, z) -> (-z, x).
+	bot.bot_square_right_delta = Vector3i(
+		-bot.bot_square_forward_delta.z,
+		0,
+		bot.bot_square_forward_delta.x
+	)
+	bot.bot_route_cell.y = bot.bot_mining_y
+
 	if _bot_has_block_ahead(bot, current_planet):
 		if not _bot_mine_looked_at(bot, current_planet):
 			_bot_stop(bot, "FIRST FORWARD BLOCK COULD NOT BE MINED")
@@ -389,10 +414,9 @@ func _bot_start_first_row(bot: ServerPlayer, current_planet: Planet) -> void:
 func _bot_begin_return(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.move_input = Vector2.ZERO
 	_bot_turn_around(bot, current_planet)
-	bot.bot_step_start_position = bot.position
+	bot.bot_return_steps_completed = 0
 	bot.bot_step_ticks = 0
-	bot.bot_action_phase = BOT_PHASE_RETURN_TO_ROW_START
-	_bot_step_forward(bot)
+	_bot_begin_step(bot, BOT_PHASE_RETURN_TO_ROW_START)
 	print("BOT ROW | RETURNING | ID: %d | SQUARE: %d | ROW: %d" % [
 		bot.peer_id,
 		bot.bot_square_index + 1,
@@ -425,6 +449,8 @@ func _bot_finish_step(
 		return
 
 	if bot.bot_action_phase == BOT_PHASE_STEP_TO_NEXT_ROW:
+		# Физически завершён один шаг вправо — обновляем клеточный маршрут.
+		bot.bot_route_cell += bot.bot_square_right_delta
 		# Переход на соседний ряд завершён. Возвращаем исходное направление.
 		_bot_turn_left(bot, current_planet)
 		bot.bot_square_row_index += 1
@@ -451,6 +477,8 @@ func _bot_finish_step(
 		])
 		return
 
+	# Шаг завершён физически: сдвигаем курсор ровно на одну клетку.
+	bot.bot_route_cell += bot.bot_square_forward_delta
 	bot.bot_steps_completed += 1
 	print("BOT ACTION | STEP VERIFIED | ID: %d | STEP: %d/%d" % [
 		bot.peer_id,
@@ -498,7 +526,7 @@ func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.heading = forward
 
 	if bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START:
-		_bot_steer_toward_row_start(bot, current_planet)
+		_bot_step_forward(bot)
 	elif (
 		bot.bot_action_phase == BOT_PHASE_STEP_FORWARD
 		or bot.bot_action_phase == BOT_PHASE_STEP_TO_NEXT_ROW
@@ -577,16 +605,22 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 
 		BOT_PHASE_RETURN_TO_ROW_START:
 			bot.bot_step_ticks += 1
-			var distance_to_row_start := bot.position.distance_to(
-				bot.bot_row_start_position
-			)
-			if distance_to_row_start <= BOT_RETURN_TOLERANCE:
-				bot.move_input = Vector2.ZERO
-				print("BOT ROW | RETURN COMPLETE | ID: %d | DISTANCE: %.3f | TICKS: %d" % [
-					bot.peer_id,
-					distance_to_row_start,
-					bot.bot_step_ticks
-				])
-				_bot_begin_next_row(bot, current_planet)
+			if _bot_has_completed_step(bot):
+				bot.bot_route_cell -= bot.bot_square_forward_delta
+				bot.bot_return_steps_completed += 1
+				if bot.bot_return_steps_completed >= BOT_ROW_LENGTH:
+					bot.move_input = Vector2.ZERO
+					print("BOT ROW | RETURN COMPLETE | ID: %d | STEPS: %d | TICKS: %d" % [
+						bot.peer_id,
+						bot.bot_return_steps_completed,
+						bot.bot_step_ticks
+					])
+					_bot_begin_next_row(bot, current_planet)
+				else:
+					# Возвращаемся следующей отдельной клеткой, без наведения на мировую точку.
+					bot.bot_step_start_position = bot.position
+					bot.bot_step_forward = bot.heading.normalized()
+					bot.bot_step_ticks = 0
+					_bot_step_forward(bot)
 
 # ============================================================
