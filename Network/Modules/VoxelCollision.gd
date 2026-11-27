@@ -139,7 +139,7 @@ static func move_capsule_legacy(
         planet,
         current_position,
         initial_up,
-                cache
+        cache
     )
 
     if initial_collision.collided:
@@ -189,7 +189,7 @@ static func move_capsule_legacy(
                 planet,
                 candidate,
                 candidate_up,
-                                cache
+                cache
             )
 
             # Препятствий нет — принимаем перемещение.
@@ -222,7 +222,7 @@ static func move_capsule_legacy(
                     planet,
                     test_position,
                     test_up,
-                                        cache
+                    cache
                 )
 
                 if test_collision:
@@ -985,7 +985,7 @@ static func resolve_capsule_collision(
                 planet,
                 position,
                 world_up,
-                                solid_cache
+                solid_cache
             )
 
         if not collision.collided:
