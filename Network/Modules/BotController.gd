@@ -403,7 +403,8 @@ func _bot_start_first_row(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.bot_route_cell.y = bot.bot_mining_y
 
 	if _bot_has_block_ahead(bot, current_planet):
-		if not _bot_mine_looked_at(bot, current_planet):
+		var target_cell := _bot_get_forward_cell(bot, current_planet)
+		if not _bot_mine_looked_at(bot, current_planet, target_cell):
 			_bot_stop(bot, "FIRST FORWARD BLOCK COULD NOT BE MINED")
 			return
 
