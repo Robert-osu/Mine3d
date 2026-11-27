@@ -433,8 +433,8 @@ func _simulate_server_player(
 		server_player.input_queue.clear()
 		return
 
-	# Боты пока стоят на месте и смотрят радиально внутрь планеты.
-	# Это позволяет добывать последовательные блоки под собой.
+	# Боты стоят на месте. Их heading задаёт горизонтальное направление
+	# квадрата добычи, а look_direction направлен по касательной плоскости.
 	if server_player.is_bot:
 		server_player.move_input = Vector2.ZERO
 		server_player.buttons = 0
@@ -442,9 +442,12 @@ func _simulate_server_player(
 		var planet_center := current_planet.to_global(
 			current_planet.get_planet_center()
 		)
-		server_player.look_direction = (
-			planet_center - server_player.position
-		).normalized()
+		var bot_up := (server_player.position - planet_center).normalized()
+		var bot_forward := server_player.heading.slide(bot_up).normalized()
+		if bot_forward.length_squared() < 0.0001:
+			bot_forward = _get_tangent_fallback(bot_up)
+		server_player.heading = bot_forward
+		server_player.look_direction = bot_forward
 
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
@@ -485,10 +488,11 @@ func _simulate_server_player(
 			mined_cell
 		)
 
-# Бот выбирает чанк под своей текущей поверхностной позицией и
-# добывает блоки по радиальной колонке внутрь планеты.
-# Один успешный или неуспешный запрос выполняется не чаще раза в секунду.
+# Бот выкапывает горизонтальный квадрат 32x32 в собственной системе
+# координат. После обхода всех 1024 колонок начинает следующий слой внутрь.
 const BOT_MINE_INTERVAL_TICKS: int = 60
+const BOT_MINE_SIDE: int = 32
+const BOT_MINE_HALF_EXTENT: float = 15.5
 
 
 func _update_bot_mining(
@@ -506,18 +510,62 @@ func _update_bot_mining(
 	var center := current_planet.to_global(
 		current_planet.get_planet_center()
 	)
-	var surface_direction := (bot.position - center).normalized()
-	var surface_point := center + surface_direction * current_planet.RADIUS
-	var surface_cell := current_planet.get_cell(surface_point)
-	var target_chunk := current_planet.index_to_chunk(surface_cell)
+	var surface_up := (bot.position - center).normalized()
+	var forward := bot.heading.slide(surface_up).normalized()
+	if forward.length_squared() < 0.0001:
+		forward = _get_tangent_fallback(surface_up)
+	var right := surface_up.cross(forward).normalized()
 
-	var mined_cell := _server_mine_block(bot, current_planet)
+	# Фиксируем рамку один раз: все слои остаются точно друг над другом,
+	# даже если ориентация бота позднее немного изменится.
+	if not bot.bot_mining_frame_initialized:
+		bot.bot_mining_center = center + surface_up * current_planet.RADIUS
+		bot.bot_mining_up = surface_up
+		bot.bot_mining_forward = forward
+		bot.bot_mining_right = right
+		bot.bot_mining_frame_initialized = true
+
+	var column_index := bot.bot_mining_index
+	var column_x := (column_index % BOT_MINE_SIDE) - BOT_MINE_SIDE / 2
+	var column_z := int(column_index / BOT_MINE_SIDE) - BOT_MINE_SIDE / 2
+	var tangent_offset := (
+		bot.bot_mining_right * (float(column_x) - 0.5)
+		+ bot.bot_mining_forward * (float(column_z) - 0.5)
+	)
+
+	# Каждая колонка проецируется на сферическую поверхность.
+	# Луч начинается на глубине текущего слоя и направлен внутрь.
+	var column_direction := (
+		bot.bot_mining_up * current_planet.RADIUS + tangent_offset
+	).normalized()
+	var column_surface := center + column_direction * current_planet.RADIUS
+	var ray_origin := (
+		column_surface
+		+ column_direction * (0.8 - float(bot.bot_mining_layer))
+	)
+	var mined_cell := current_planet.get_mined_cell(
+		ray_origin,
+		-column_direction,
+		maxf(settings.mining_distance, 2.0)
+	)
+
+	bot.bot_mining_index += 1
+	if bot.bot_mining_index >= BOT_MINE_SIDE * BOT_MINE_SIDE:
+		bot.bot_mining_index = 0
+		bot.bot_mining_layer += 1
+
 	if mined_cell == INVALID_MINED_CELL:
 		return
+	if not current_planet.destroy_block(mined_cell):
+		return
+
+	if is_instance_valid(world_network):
+		world_network.queue_mined_cell(mined_cell)
+	receive_block_destroyed.rpc(mined_cell)
 
 	print(
-		"BOT MINED BLOCK | ID: %d | CHUNK: %s | CELL: %s"
-		% [bot.peer_id, target_chunk, mined_cell]
+		"BOT MINED BLOCK | ID: %d | LAYER: %d | CELL: %s"
+		% [bot.peer_id, bot.bot_mining_layer, mined_cell]
 	)
 
 
