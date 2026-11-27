@@ -77,9 +77,8 @@ const MAX_INPUT_SEQUENCE_GAP: int = 120
 const INPUT_RATE_WINDOW_TICKS: int = 60
 const MAX_INPUT_RPCS_PER_WINDOW: int = 90
 
-# Защита от неограниченного ускорения падения и дорогого replay.
+# Защита от неограниченного ускорения падения и роста очереди ввода.
 const MAX_FALL_SPEED: float = 30.0
-const MAX_RECONCILIATION_REPLAY_INPUTS: int = 12
 const MAX_PENDING_INPUTS: int = 240
 
 # ============================================================
@@ -846,17 +845,10 @@ func _reconcile_player(
 
 	var previous_buttons := acknowledged_buttons
 
-	# Повторно проигрываем только последние вводы, которые сервер ещё
-	# не подтвердил. При сильном отставании это ограничивает стоимость
-	# reconciliation; сами вводы остаются в очереди до подтверждения.
-	var replay_start := maxi(
-		0,
-		pending_inputs.size() - MAX_RECONCILIATION_REPLAY_INPUTS
-	)
-	if replay_start > 0:
-		previous_buttons = int(pending_inputs[replay_start - 1]["buttons"])
-
-	for replay_index in range(replay_start, pending_inputs.size()):
+	# Повторно проигрываем ВСЕ вводы, которые сервер ещё не подтвердил.
+	# Пропуск старых кадров даже при большом backlog приводит к потере
+	# предсказанного движения и повторяющимся ошибкам reconciliation.
+	for replay_index in range(pending_inputs.size()):
 		var frame: Dictionary = pending_inputs[replay_index]
 		var result := _simulate_movement(
 			current_planet,
@@ -927,7 +919,7 @@ func _simulate_movement(
 	var forward := look_direction.slide(up).normalized()
 
 	if forward.length_squared() < 0.001:
-		forward = Vector3.FORWARD.slide(up).normalized()
+		forward = _get_tangent_fallback(up)
 
 	var right := forward.cross(up).normalized()
 
@@ -1151,22 +1143,33 @@ func _transport_tangent_heading(
 	var tangent_heading := heading.slide(source_up).normalized()
 
 	if tangent_heading.length_squared() < 0.0001:
-		var fallback_axis := Vector3.UP
-		if absf(source_up.dot(fallback_axis)) > 0.95:
-			fallback_axis = Vector3.FORWARD
-		tangent_heading = fallback_axis.slide(source_up).normalized()
+		tangent_heading = _get_tangent_fallback(source_up)
 
 	# Параллельно переносим направление кратчайшим поворотом между нормалями.
 	var transport_rotation := Quaternion(source_up, target_up)
 	var transported := (transport_rotation * tangent_heading).slide(target_up).normalized()
 
 	if transported.length_squared() < 0.0001:
-		var fallback_axis := Vector3.UP
-		if absf(target_up.dot(fallback_axis)) > 0.95:
-			fallback_axis = Vector3.FORWARD
-		transported = fallback_axis.slide(target_up).normalized()
+		transported = _get_tangent_fallback(target_up)
 
 	return transported
+
+
+# Выбираем мировую ось, наименее параллельную нормали поверхности.
+# Поэтому проекция не вырождается ни на одном из полюсов.
+func _get_tangent_fallback(up: Vector3) -> Vector3:
+	var surface_up := up.normalized()
+	var fallback_axis := Vector3.RIGHT
+	var alignment := absf(surface_up.dot(fallback_axis))
+
+	if absf(surface_up.dot(Vector3.UP)) < alignment:
+		fallback_axis = Vector3.UP
+		alignment = absf(surface_up.dot(fallback_axis))
+
+	if absf(surface_up.dot(Vector3.FORWARD)) < alignment:
+		fallback_axis = Vector3.FORWARD
+
+	return fallback_axis.slide(surface_up).normalized()
 
 
 func _interpolate_spherical_position(
@@ -1318,7 +1321,13 @@ func _update_remote_players() -> void:
 
 		var first: Dictionary = history[0]
 		var first_tick: float = float(first["server_tick"])
-		var second_tick: float = float(history[-1]["server_tick"])
+
+		# Для интерполяции берём ближайший снимок ПОСЛЕ render_tick,
+		# а не самый новый снимок из всей истории.
+		var second: Dictionary = first
+		if history.size() > 1:
+			second = history[1]
+		var second_tick: float = float(second["server_tick"])
 
 		var position: Vector3
 		var heading: Vector3
@@ -1343,7 +1352,6 @@ func _update_remote_players() -> void:
 				up
 			)
 		else:
-			var second: Dictionary = history[-1]
 			var weight := 0.0
 
 			if second_tick > first_tick:
