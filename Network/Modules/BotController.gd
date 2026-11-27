@@ -223,7 +223,10 @@ func _bot_has_block_ahead(bot: ServerPlayer, current_planet: Planet) -> bool:
 		ray_direction,
 		network.settings.mining_distance
 	)
-	return target_cell != INVALID_MINED_CELL
+	return (
+		target_cell != INVALID_MINED_CELL
+		and target_cell.y == bot.bot_mining_y
+	)
 
 
 func _bot_mine_cooldown_elapsed(bot: ServerPlayer) -> bool:
@@ -277,6 +280,14 @@ func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
 		])
 		return false
 
+	# Первый добытый блок задаёт постоянную высоту всей раскопки.
+	# Дальше блоки с другой координатой Y не трогаем.
+	if (
+		bot.bot_mining_y >= 0
+		and mined_cell.y != bot.bot_mining_y
+	):
+		return false
+
 	if not current_planet.destroy_block(mined_cell):
 		return false
 
@@ -289,6 +300,12 @@ func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
 			bot.peer_id, mined_cell
 		])
 		return false
+
+	if bot.bot_mining_y < 0:
+		bot.bot_mining_y = mined_cell.y
+		print("BOT ROW | MINING LEVEL LOCKED | ID: %d | Y: %d" % [
+			bot.peer_id, bot.bot_mining_y
+		])
 
 	bot.bot_last_mine_tick = network.server_physics_tick
 	print("BOT ACTION | MINE VERIFIED | ID: %d | CELL: %s | TICK: %d" % [
