@@ -264,7 +264,6 @@ func _bot_stop(bot: ServerPlayer, reason: String) -> void:
 
 # Начинает один физический шаг в текущем направлении взгляда/движения.
 func _bot_begin_step(bot: ServerPlayer, phase: int) -> void:
-	var up := bot.heading.normalized()
 	bot.bot_step_forward = bot.heading.normalized()
 	bot.bot_step_start_position = bot.position
 	bot.bot_step_ticks = 0
