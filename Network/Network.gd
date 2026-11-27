@@ -326,6 +326,16 @@ func create_bot_player(requested_name: String = "") -> int:
 		push_error("Cannot create bot: planet not found.")
 		return 0
 
+	var active_bot_count := 0
+	for player_variant in server_players.values():
+		var existing_player: ServerPlayer = player_variant
+		if existing_player.is_bot:
+			active_bot_count += 1
+
+	if active_bot_count >= MAX_CONFIGURED_BOTS:
+		push_warning("Bot limit reached: %d" % MAX_CONFIGURED_BOTS)
+		return 0
+
 	while server_players.has(next_bot_id) or connected_players.has(next_bot_id):
 		next_bot_id -= 1
 
@@ -336,9 +346,9 @@ func create_bot_player(requested_name: String = "") -> int:
 	if not server_players.has(bot_id):
 		return 0
 
+	bot_counter += 1
 	var bot_name := requested_name.strip_edges()
 	if bot_name.is_empty():
-		bot_counter += 1
 		bot_name = "Bot %d" % bot_counter
 	bot_name = bot_name.left(NetworkProtocol.MAX_PLAYER_NAME_LENGTH)
 
@@ -363,7 +373,7 @@ func _spawn_configured_bots() -> void:
 		create_bot_player("Bot %d" % (index + 1))
 
 	if configured_bot_count > 0:
-		print("BOT PLAYERS READY | COUNT: %d" % server_players.size())
+		print("BOT PLAYERS READY | COUNT: %d" % configured_bot_count)
 
 
 func _server_physics_process(_delta: float) -> void:
