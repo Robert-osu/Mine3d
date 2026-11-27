@@ -126,7 +126,7 @@ func welcome(
 # Сервер отклоняет подключение.
 @rpc("authority", "call_remote", "reliable", 0)
 func reject(reason: String) -> void:
-    print("JOIN REJECTED: ", reason)
+    push_warning("Join rejected: %s" % reason)
 
     Network._cleanup_client_connection()
     multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
