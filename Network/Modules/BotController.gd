@@ -146,7 +146,6 @@ func setup(network_node: Node) -> void:
 const BOT_ROW_LENGTH: int = 32
 const BOT_SQUARE_SIZE: int = 32
 const BOT_STEP_DISTANCE: float = 0.85
-const BOT_STEP_TIMEOUT_TICKS: int = 120
 const BOT_RETURN_TOLERANCE: float = 0.45
 const BOT_MIN_MINE_INTERVAL_TICKS: int = 60
 
@@ -431,8 +430,6 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 			or bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START
 		):
 			bot.bot_step_ticks += 1
-			if bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
-				_bot_stop(bot, "MOVEMENT TIMEOUT WHILE AIRBORNE")
 		return
 
 	match bot.bot_action_phase:
@@ -476,8 +473,6 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 			bot.bot_step_ticks += 1
 			if _bot_has_completed_step(bot):
 				_bot_finish_step(bot, current_planet)
-			elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
-				_bot_stop(bot, "STEP DISTANCE NOT REACHED")
 
 		BOT_PHASE_RETURN_TO_ROW_START:
 			bot.bot_step_ticks += 1
@@ -493,23 +488,5 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 			):
 				bot.move_input = Vector2.ZERO
 				_bot_begin_next_row(bot, current_planet)
-			elif bot.bot_step_ticks >= BOT_STEP_TIMEOUT_TICKS:
-				var return_diagnostic_format: String = (
-					"BOT RETURN FAILED | ID: %d | DISTANCE: %.3f | "
-					+ "START: %s | CURRENT: %s | STEP START: %s | "
-					+ "STEP FORWARD: %s | HEADING: %s | LOOK: %s | TICKS: %d"
-				)
-				print(return_diagnostic_format % [
-					bot.peer_id,
-					distance_to_row_start,
-					bot.bot_row_start_position,
-					bot.position,
-					bot.bot_step_start_position,
-					bot.bot_step_forward,
-					bot.heading,
-					bot.look_direction,
-					bot.bot_step_ticks
-				])
-				_bot_stop(bot, "COULD NOT RETURN TO ROW START")
 
 # ============================================================
