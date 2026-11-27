@@ -236,7 +236,6 @@ func _ready() -> void:
     terrain_material.roughness = 1.0
     terrain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-    print("PLANET READY | SIZE: ", SIZE, " | RADIUS: ", RADIUS)
 
 
 func _process(_delta: float) -> void:
