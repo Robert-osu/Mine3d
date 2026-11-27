@@ -131,6 +131,7 @@ const BOT_SQUARE_SIZE: int = 32
 const BOT_STEP_DISTANCE: float = 0.85
 const BOT_STEP_TIMEOUT_TICKS: int = 120
 const BOT_RETURN_TOLERANCE: float = 0.45
+const BOT_MIN_MINE_INTERVAL_TICKS: int = 60
 
 const BOT_PHASE_INITIAL_MINE: int = 0
 const BOT_PHASE_MINE_FORWARD: int = 1
@@ -138,6 +139,9 @@ const BOT_PHASE_STEP_FORWARD: int = 2
 const BOT_PHASE_RETURN_TO_ROW_START: int = 3
 const BOT_PHASE_STEP_TO_NEXT_ROW: int = 4
 const BOT_PHASE_DONE: int = 5
+const BOT_PHASE_WAIT_INITIAL_MINE: int = 6
+const BOT_PHASE_WAIT_FORWARD_MINE: int = 7
+const BOT_PHASE_WAIT_NEXT_ROW_MINE: int = 8
 
 
 func surface_up(bot: ServerPlayer, current_planet: Planet) -> Vector3:
@@ -192,6 +196,13 @@ func _bot_is_block_mined(current_planet: Planet, cell: Vector3i) -> bool:
 	return not current_planet.is_solid(cell.x, cell.y, cell.z)
 
 
+func _bot_mine_cooldown_elapsed(bot: ServerPlayer) -> bool:
+	return (
+		network.server_physics_tick - bot.bot_last_mine_tick
+			>= BOT_MIN_MINE_INTERVAL_TICKS
+	)
+
+
 # Проверяет, что координаты игрока действительно изменились.
 func _bot_position_changed(
 	start_position: Vector3,
@@ -217,7 +228,8 @@ func _bot_has_completed_step(bot: ServerPlayer) -> bool:
 
 # Добывает блок перед ботом и подтверждает изменение состояния мира.
 func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
-	if not bot.grounded:
+	# Добыча доступна только стоя на земле и не чаще одного раза в секунду.
+	if not bot.grounded or not _bot_mine_cooldown_elapsed(bot):
 		return false
 
 	var up := surface_up(bot, current_planet)
@@ -248,8 +260,9 @@ func _bot_mine_looked_at(bot: ServerPlayer, current_planet: Planet) -> bool:
 		])
 		return false
 
-	print("BOT ACTION | MINE VERIFIED | ID: %d | CELL: %s" % [
-		bot.peer_id, mined_cell
+	bot.bot_last_mine_tick = network.server_physics_tick
+	print("BOT ACTION | MINE VERIFIED | ID: %d | CELL: %s | TICK: %d" % [
+		bot.peer_id, mined_cell, bot.bot_last_mine_tick
 	])
 	return true
 
@@ -313,13 +326,9 @@ func _bot_begin_next_row(
 	_bot_turn_around(bot, current_planet)
 	_bot_turn_right(bot, current_planet)
 	_bot_look_forward(bot, current_planet)
-
-	if not _bot_mine_looked_at(bot, current_planet):
-		_bot_stop(bot, "NEXT ROW BLOCK WAS NOT MINED")
-		return
-
+	# Поворот выполняем сразу, но добычу откладываем до cooldown и grounded.
 	bot.bot_steps_completed = 0
-	_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
+	bot.bot_action_phase = BOT_PHASE_WAIT_NEXT_ROW_MINE
 
 
 func _bot_finish_step(
@@ -349,12 +358,8 @@ func _bot_finish_step(
 		# Боковой шаг уже занял первый блок нового ряда.
 		bot.bot_steps_completed = 1
 		_bot_look_forward(bot, current_planet)
-
-		if not _bot_mine_looked_at(bot, current_planet):
-			_bot_stop(bot, "ROW FORWARD BLOCK WAS NOT MINED")
-			return
-
-		_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+		bot.bot_action_phase = BOT_PHASE_WAIT_FORWARD_MINE
+		bot.move_input = Vector2.ZERO
 		print("BOT ROW | STARTED | ID: %d | SQUARE: %d | ROW: %d" % [
 			bot.peer_id,
 			bot.bot_square_index + 1,
@@ -373,13 +378,9 @@ func _bot_finish_step(
 		_bot_begin_return(bot, current_planet)
 		return
 
-	# Следующий блок ряда добывается только после подтверждённого шага.
-	_bot_look_forward(bot, current_planet)
-	if not _bot_mine_looked_at(bot, current_planet):
-		_bot_stop(bot, "FORWARD BLOCK WAS NOT MINED")
-		return
-
-	_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+	# Следующий блок добывается после секунды cooldown и подтверждения grounded.
+	bot.bot_action_phase = BOT_PHASE_WAIT_FORWARD_MINE
+	bot.move_input = Vector2.ZERO
 
 
 func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
@@ -424,7 +425,28 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 				_bot_stop(bot, "BLOCK BELOW WAS NOT MINED")
 				return
 			print("BOT ACTION | BELOW BLOCK VERIFIED | ID: %d" % bot.peer_id)
-			_bot_start_first_row(bot, current_planet)
+			bot.bot_action_phase = BOT_PHASE_WAIT_INITIAL_MINE
+			bot.move_input = Vector2.ZERO
+
+		BOT_PHASE_WAIT_INITIAL_MINE:
+			if bot.grounded and _bot_mine_cooldown_elapsed(bot):
+				_bot_start_first_row(bot, current_planet)
+
+		BOT_PHASE_WAIT_FORWARD_MINE:
+			if bot.grounded and _bot_mine_cooldown_elapsed(bot):
+				_bot_look_forward(bot, current_planet)
+				if not _bot_mine_looked_at(bot, current_planet):
+					_bot_stop(bot, "FORWARD BLOCK WAS NOT MINED")
+					return
+				_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+
+		BOT_PHASE_WAIT_NEXT_ROW_MINE:
+			if bot.grounded and _bot_mine_cooldown_elapsed(bot):
+				_bot_look_forward(bot, current_planet)
+				if not _bot_mine_looked_at(bot, current_planet):
+					_bot_stop(bot, "NEXT ROW BLOCK WAS NOT MINED")
+					return
+				_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
 
 		BOT_PHASE_MINE_FORWARD:
 			_bot_look_forward(bot, current_planet)
