@@ -212,6 +212,20 @@ func _bot_is_block_mined(current_planet: Planet, cell: Vector3i) -> bool:
 	return not current_planet.is_solid(cell.x, cell.y, cell.z)
 
 
+# Проверяет наличие блока перед ботом. Отсутствие блока — не ошибка:
+# в этом случае бот может сразу переходить к физическому шагу.
+func _bot_has_block_ahead(bot: ServerPlayer, current_planet: Planet) -> bool:
+	var up := surface_up(bot, current_planet)
+	var ray_origin := bot.position + up * 0.15
+	var ray_direction := bot.look_direction.normalized()
+	var target_cell := current_planet.get_mined_cell(
+		ray_origin,
+		ray_direction,
+		network.settings.mining_distance
+	)
+	return target_cell != INVALID_MINED_CELL
+
+
 func _bot_mine_cooldown_elapsed(bot: ServerPlayer) -> bool:
 	return (
 		network.server_physics_tick - bot.bot_last_mine_tick
@@ -304,15 +318,16 @@ func _bot_step_forward(bot: ServerPlayer) -> void:
 	bot.move_input = Vector2(0.0, -1.0)
 
 
-# После добычи блока под ногами немедленно добывает первый блок впереди.
-# Оба действия выполняются в одном серверном обновлении, чтобы бот
-# не успел провалиться до расчистки прохода перед собой.
+# После добычи блока под ногами проверяет проход и начинает первый шаг.
+# Если впереди пусто, добыча не требуется.
 func _bot_start_first_row(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.bot_row_start_position = bot.position
 	_bot_look_forward(bot, current_planet)
-	if not _bot_mine_looked_at(bot, current_planet):
-		_bot_stop(bot, "FIRST FORWARD BLOCK WAS NOT MINED")
-		return
+
+	if _bot_has_block_ahead(bot, current_planet):
+		if not _bot_mine_looked_at(bot, current_planet):
+			_bot_stop(bot, "FIRST FORWARD BLOCK COULD NOT BE MINED")
+			return
 
 	bot.bot_steps_completed = 0
 	_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
@@ -468,26 +483,35 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 				_bot_start_first_row(bot, current_planet)
 
 		BOT_PHASE_WAIT_FORWARD_MINE:
-			if bot.grounded and _bot_mine_cooldown_elapsed(bot):
+			if bot.grounded:
 				_bot_look_forward(bot, current_planet)
-				if not _bot_mine_looked_at(bot, current_planet):
-					_bot_stop(bot, "FORWARD BLOCK WAS NOT MINED")
-					return
-				_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+				if not _bot_has_block_ahead(bot, current_planet):
+					# Перед ботом уже пусто — пропускаем добычу и шагаем.
+					_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
+				elif _bot_mine_cooldown_elapsed(bot):
+					if not _bot_mine_looked_at(bot, current_planet):
+						_bot_stop(bot, "FORWARD BLOCK COULD NOT BE MINED")
+						return
+					_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
 
 		BOT_PHASE_WAIT_NEXT_ROW_MINE:
-			if bot.grounded and _bot_mine_cooldown_elapsed(bot):
+			if bot.grounded:
 				_bot_look_forward(bot, current_planet)
-				if not _bot_mine_looked_at(bot, current_planet):
-					_bot_stop(bot, "NEXT ROW BLOCK WAS NOT MINED")
-					return
-				_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
+				if not _bot_has_block_ahead(bot, current_planet):
+					# Соседняя клетка свободна — переходим в неё без добычи.
+					_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
+				elif _bot_mine_cooldown_elapsed(bot):
+					if not _bot_mine_looked_at(bot, current_planet):
+						_bot_stop(bot, "NEXT ROW BLOCK COULD NOT BE MINED")
+						return
+					_bot_begin_step(bot, BOT_PHASE_STEP_TO_NEXT_ROW)
 
 		BOT_PHASE_MINE_FORWARD:
 			_bot_look_forward(bot, current_planet)
-			if not _bot_mine_looked_at(bot, current_planet):
-				_bot_stop(bot, "FORWARD BLOCK WAS NOT MINED")
-				return
+			if _bot_has_block_ahead(bot, current_planet):
+				if not _bot_mine_looked_at(bot, current_planet):
+					_bot_stop(bot, "FORWARD BLOCK COULD NOT BE MINED")
+					return
 			_bot_begin_step(bot, BOT_PHASE_STEP_FORWARD)
 
 		BOT_PHASE_STEP_FORWARD, BOT_PHASE_STEP_TO_NEXT_ROW:
