@@ -119,6 +119,10 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if multiplayer.is_server():
+		_server_command_poll_ticks += 1
+		if _server_command_poll_ticks >= SERVER_COMMAND_POLL_INTERVAL_TICKS:
+			_server_command_poll_ticks = 0
+			_poll_server_command_file()
 		_server_physics_process(delta)
 
 	_update_remote_players()
@@ -152,41 +156,85 @@ func start_server() -> void:
 
 	multiplayer.multiplayer_peer = peer
 
-# Читает команды из stdin в отдельном потоке, чтобы не блокировать физику сервера.
-var server_console_thread: Thread
+# Append-only command queue. The byte offset is persisted so processed lines
+# are not executed again after a normal server restart.
+const SERVER_COMMAND_FILE := "user://server_commands.txt"
+const SERVER_COMMAND_STATE_FILE := "user://server_commands.offset"
+const SERVER_COMMAND_POLL_INTERVAL_TICKS: int = 15
+
+var _server_command_poll_ticks: int = 0
+var _server_command_read_offset: int = 0
+var _server_command_file_path: String = ""
+var _server_command_state_path: String = ""
 
 
 func _start_server_console() -> void:
-	if OS.get_name() != "Linux":
-		push_warning("Server console input is currently supported on Linux only.")
+	_server_command_file_path = ProjectSettings.globalize_path(SERVER_COMMAND_FILE)
+	_server_command_state_path = ProjectSettings.globalize_path(SERVER_COMMAND_STATE_FILE)
+	_load_server_command_offset()
+	print("SERVER COMMAND FILE READY | APPEND COMMANDS TO: %s" % _server_command_file_path)
+	print("SERVER COMMANDS | FORMAT: bot add [count] | PROCESSED LINES ARE REMEMBERED")
+
+
+func _load_server_command_offset() -> void:
+	if not FileAccess.file_exists(SERVER_COMMAND_STATE_FILE):
+		_server_command_read_offset = 0
 		return
 
-	server_console_thread = Thread.new()
-	var error := server_console_thread.start(_server_console_input_loop)
-	if error != OK:
-		push_warning("Could not start server console input: %s" % error)
-		server_console_thread = null
+	var state := FileAccess.open(SERVER_COMMAND_STATE_FILE, FileAccess.READ)
+	if state == null:
+		push_warning("Could not read server command checkpoint; starting from byte 0.")
+		_server_command_read_offset = 0
 		return
 
-	print("SERVER CONSOLE READY | USE: bot add [count]")
+	_server_command_read_offset = maxi(int(state.get_as_text().strip_edges()), 0)
+	state.close()
 
 
-func _server_console_input_loop() -> void:
-	var input := FileAccess.open("/dev/stdin", FileAccess.READ)
+func _save_server_command_offset() -> void:
+	var state := FileAccess.open(SERVER_COMMAND_STATE_FILE, FileAccess.WRITE)
+	if state == null:
+		push_error("Could not save server command checkpoint. Commands may be repeated after restart.")
+		return
+
+	state.store_string(str(_server_command_read_offset))
+	state.close()
+
+
+func _poll_server_command_file() -> void:
+	if _server_command_file_path.is_empty():
+		return
+
+	if not FileAccess.file_exists(SERVER_COMMAND_FILE):
+		return
+
+	var file_size := FileAccess.get_file_as_bytes(SERVER_COMMAND_FILE).size()
+	if file_size < _server_command_read_offset:
+		push_warning("Server command file was truncated; restarting its read position.")
+		_server_command_read_offset = 0
+		_save_server_command_offset()
+
+	var input := FileAccess.open(SERVER_COMMAND_FILE, FileAccess.READ)
 	if input == null:
-		call_deferred("_on_server_console_input_unavailable")
 		return
+
+	input.seek(_server_command_read_offset)
 
 	while not input.eof_reached():
+		var line_start := input.get_position()
 		var command := input.get_line().strip_edges()
+		var line_end := input.get_position()
+
+		if line_end <= line_start:
+			break
+
+		_server_command_read_offset = line_end
 		if not command.is_empty():
-			call_deferred("_handle_server_console_command", command)
+			_handle_server_console_command(command)
+
+		_save_server_command_offset()
 
 	input.close()
-
-
-func _on_server_console_input_unavailable() -> void:
-	push_warning("Could not read server console from /dev/stdin.")
 
 
 func _handle_server_console_command(command: String) -> void:
