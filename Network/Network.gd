@@ -489,6 +489,10 @@ func _simulate_server_player(
 
 	server_player.finish_tick()
 
+	if server_player.is_bot:
+		bot_controller.update_actions(server_player, current_planet)
+		return
+
 	# Добываем после применения состояния из input, содержащего удар.
 	var mine_requests: int = int(input_frame.get("mine_requests", 0))
 	var sequence: int = int(input_frame.get("sequence", -1))
