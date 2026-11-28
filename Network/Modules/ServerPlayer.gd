@@ -53,6 +53,11 @@ var bot_action_next_tick: int = 0
 var bot_step_start_position: Vector3 = Vector3.ZERO
 var bot_step_forward: Vector3 = Vector3.FORWARD
 var bot_step_ticks: int = 0
+var bot_step_active: bool = false
+var bot_step_completed: bool = false
+var bot_step_failed: bool = false
+var bot_step_last_position: Vector3 = Vector3.ZERO
+var bot_step_stall_ticks: int = 0
 var bot_steps_completed: int = 0
 var bot_row_start_position: Vector3 = Vector3.ZERO
 # Маршрут бота хранится в целочисленных координатах клеток планеты.
