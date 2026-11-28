@@ -121,20 +121,18 @@ func _find_nearest_block(
 	bot: ServerPlayer,
 	current_planet: Planet
 ) -> Vector3i:
-	var search_radius := int(ceil(network.settings.mining_distance))
-	var local_position := current_planet.to_local(bot.position)
+	var mining_distance: float = float(network.settings.mining_distance)
+	var search_radius: int = ceili(mining_distance)
+	var local_position: Vector3 = current_planet.to_local(bot.position)
 	var center_cell := Vector3i(
 		floori(local_position.x / current_planet.BLOCK_SIZE),
 		floori(local_position.y / current_planet.BLOCK_SIZE),
 		floori(local_position.z / current_planet.BLOCK_SIZE)
 	)
 
-	var max_distance_squared := (
-		network.settings.mining_distance
-		* network.settings.mining_distance
-	)
-	var nearest_cell := Vector3i(-1, -1, -1)
-	var nearest_distance_squared := max_distance_squared
+	var max_distance_squared: float = mining_distance * mining_distance
+	var nearest_cell: Vector3i = Vector3i(-1, -1, -1)
+	var nearest_distance_squared: float = max_distance_squared
 
 	for z in range(center_cell.z - search_radius, center_cell.z + search_radius + 1):
 		for y in range(center_cell.y - search_radius, center_cell.y + search_radius + 1):
