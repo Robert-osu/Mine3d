@@ -89,14 +89,15 @@ func create_bot_player(requested_name: String = "") -> int:
 
 # Один раз в секунду ищет ближайший открытый блок вокруг бота и добывает его.
 # Бот не задаёт движение и не меняет направление взгляда.
-const BOT_MINE_INTERVAL_TICKS: int = 60
+const BOT_MINE_INTERVAL_SECONDS: float = 1.0
 
 
 func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.move_input = Vector2.ZERO
 	bot.buttons = 0
 
-	if network.server_physics_tick - bot.bot_last_mine_tick < BOT_MINE_INTERVAL_TICKS:
+	var mine_interval_ticks := ceili(BOT_MINE_INTERVAL_SECONDS * Engine.physics_ticks_per_second)
+	if network.server_physics_tick - bot.bot_last_mine_tick < mine_interval_ticks:
 		return
 
 	# Ограничиваем частоту и поиска, даже если поблизости нет блоков.
