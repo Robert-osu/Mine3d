@@ -9,8 +9,11 @@ const MAX_CONFIGURED_BOTS: int = 32
 var network: Node
 var agents: Dictionary = {}
 var next_agent_index: int = 0
+var next_action_tick: int = 0
+var next_action_agent_index: int = 0
 
 const GLOBAL_SEARCH_CELLS_PER_TICK: int = 320
+const BOT_ACTION_DURATION_SECONDS: float = 0.2
 var next_bot_id: int = BOT_ID_START
 var configured_bot_count: int = 0
 var configured_bots_spawned: bool = false
@@ -110,8 +113,7 @@ func update_agents(current_planet: Planet) -> void:
 		shared_budget_per_agent
 	)
 
-	# Поворачиваем порядок обхода, чтобы остаточная нагрузка не закреплялась
-	# за одним и тем же ботом при нечётном количестве агентов.
+	# Сначала каждый агент продолжает собственный поиск.
 	var start_index: int = posmod(next_agent_index, agent_count)
 	next_agent_index = (start_index + 1) % agent_count
 
@@ -123,7 +125,38 @@ func update_agents(current_planet: Planet) -> void:
 			continue
 
 		var agent: BotAgent = agents[bot_id]
-		agent.update(current_planet, per_agent_budget)
+		agent.update_search(current_planet, per_agent_budget)
+
+	# Добыча выполняется через единый глобальный шлюз.
+	# В один момент времени разрешено только одно действие от любого бота.
+	var action_interval_ticks: int = maxi(
+		1,
+		ceili(BOT_ACTION_DURATION_SECONDS * Engine.physics_ticks_per_second)
+	)
+	if network.server_physics_tick < next_action_tick:
+		return
+
+	var remaining_agent_ids: Array = agents.keys()
+	remaining_agent_ids.sort()
+	var remaining_count: int = remaining_agent_ids.size()
+	if remaining_count == 0:
+		return
+
+	var action_start: int = posmod(next_action_agent_index, remaining_count)
+	for offset in range(remaining_count):
+		var index: int = (action_start + offset) % remaining_count
+		var bot_id: int = int(remaining_agent_ids[index])
+		if not network.server_players.has(bot_id):
+			continue
+
+		var agent: BotAgent = agents[bot_id]
+		if not agent.has_pending_action():
+			continue
+
+		if agent.execute_action(current_planet):
+			next_action_tick = network.server_physics_tick + action_interval_ticks
+			next_action_agent_index = (index + 1) % remaining_count
+			return
 
 
 func remove_agent(player_id: int) -> void:
