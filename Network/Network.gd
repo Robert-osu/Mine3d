@@ -274,6 +274,7 @@ func _on_peer_disconnected(id: int) -> void:
 	connected_players.erase(id)
 	server_players.erase(id)
 	spawn_slots.erase(id)
+	bot_manager.remove_agent(id)
 
 	if is_instance_valid(world_network):
 		world_network.cancel_pending_player(id)
