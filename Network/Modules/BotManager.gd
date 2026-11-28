@@ -9,11 +9,12 @@ const MAX_CONFIGURED_BOTS: int = 32
 var network: Node
 var agents: Dictionary = {}
 var next_agent_index: int = 0
-var next_action_tick: int = 0
 var next_action_agent_index: int = 0
+var active_action_bot_id: int = 0
+var active_action_end_tick: int = 0
 
 const GLOBAL_SEARCH_CELLS_PER_TICK: int = 320
-const BOT_ACTION_DURATION_SECONDS: float = 0.2
+const BOT_ACTION_DURATION_SECONDS: float = 0.5
 var next_bot_id: int = BOT_ID_START
 var configured_bot_count: int = 0
 var configured_bots_spawned: bool = false
@@ -127,13 +128,27 @@ func update_agents(current_planet: Planet) -> void:
 		var agent: BotAgent = agents[bot_id]
 		agent.update_search(current_planet, per_agent_budget)
 
-	# Добыча выполняется через единый глобальный шлюз.
-	# В один момент времени разрешено только одно действие от любого бота.
-	var action_interval_ticks: int = maxi(
-		1,
-		ceili(BOT_ACTION_DURATION_SECONDS * Engine.physics_ticks_per_second)
-	)
-	if network.server_physics_tick < next_action_tick:
+	# Если действие уже выполняется, никто другой не может начать своё.
+	# Результат добычи применяется только после полного времени выполнения.
+	if active_action_bot_id != 0:
+		if not agents.has(active_action_bot_id):
+			active_action_bot_id = 0
+			active_action_end_tick = 0
+			return
+
+		var active_agent: BotAgent = agents[active_action_bot_id]
+		if not network.server_players.has(active_action_bot_id):
+			active_agent.cancel_action()
+			active_action_bot_id = 0
+			active_action_end_tick = 0
+			return
+
+		if network.server_physics_tick < active_action_end_tick:
+			return
+
+		active_agent.complete_action(current_planet)
+		active_action_bot_id = 0
+		active_action_end_tick = 0
 		return
 
 	var remaining_agent_ids: Array = agents.keys()
@@ -143,6 +158,10 @@ func update_agents(current_planet: Planet) -> void:
 		return
 
 	var action_start: int = posmod(next_action_agent_index, remaining_count)
+	var action_duration_ticks: int = maxi(
+		1,
+		ceili(BOT_ACTION_DURATION_SECONDS * Engine.physics_ticks_per_second)
+	)
 	for offset in range(remaining_count):
 		var index: int = (action_start + offset) % remaining_count
 		var bot_id: int = int(remaining_agent_ids[index])
@@ -153,8 +172,9 @@ func update_agents(current_planet: Planet) -> void:
 		if not agent.has_pending_action():
 			continue
 
-		if agent.execute_action(current_planet):
-			next_action_tick = network.server_physics_tick + action_interval_ticks
+		if agent.begin_action():
+			active_action_bot_id = bot_id
+			active_action_end_tick = network.server_physics_tick + action_duration_ticks
 			next_action_agent_index = (index + 1) % remaining_count
 			return
 
