@@ -1,7 +1,7 @@
 
 extends Node
 
-const BOT_CONTROLLER_SCRIPT = preload("res://Network/Modules/BotController.gd")
+const BOT_MANAGER_SCRIPT = preload("res://Network/Modules/BotManager.gd")
 
 # ============================================================
 # NETWORK
@@ -10,7 +10,7 @@ const BOT_CONTROLLER_SCRIPT = preload("res://Network/Modules/BotController.gd")
 
 var connection_network: ConnectionNetwork
 var world_network: WorldNetwork
-var bot_controller: BotController
+var bot_manager: BotManager
 
 
 # Параметры движения.
@@ -97,8 +97,8 @@ func _create_modules() -> void:
 	world_network.name = "WorldNetwork"
 	add_child(world_network)
 
-	bot_controller = BOT_CONTROLLER_SCRIPT.new()
-	bot_controller.setup(self)
+	bot_manager = BOT_MANAGER_SCRIPT.new()
+	bot_manager.setup(self)
 
 func _ready() -> void:
 	_create_modules()
@@ -106,7 +106,7 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 
 	if "--server" in args:
-		bot_controller.configure_from_args(args)
+		bot_manager.configure_from_args(args)
 		start_server()
 		if multiplayer.is_server():
 			_start_server_console()
@@ -259,7 +259,7 @@ func _handle_server_console_command(command: String) -> void:
 
 	var added := 0
 	for index in range(count):
-		if bot_controller.create_bot_player() == 0:
+		if bot_manager.create_bot_player() == 0:
 			break
 		added += 1
 
@@ -420,7 +420,7 @@ func _server_physics_process(_delta: float) -> void:
 	if current_planet == null:
 		return
 
-	bot_controller.spawn_configured_bots_if_needed()
+	bot_manager.spawn_configured_bots_if_needed()
 
 	server_physics_tick += 1
 	snapshot_counter += 1
@@ -490,7 +490,7 @@ func _simulate_server_player(
 	server_player.finish_tick()
 
 	if server_player.is_bot:
-		bot_controller.update_actions(server_player, current_planet)
+		bot_manager.update_agent(server_player, current_planet)
 		return
 
 	# Добываем после применения состояния из input, содержащего удар.
