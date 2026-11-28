@@ -47,32 +47,6 @@ var input_queue: Array[Dictionary] = []
 
 var grounded: bool = false
 
-# Состояние простого контроллера действий бота.
-var bot_action_phase: int = 0
-var bot_action_next_tick: int = 0
-var bot_step_start_position: Vector3 = Vector3.ZERO
-var bot_step_forward: Vector3 = Vector3.FORWARD
-var bot_step_ticks: int = 0
-var bot_step_active: bool = false
-var bot_step_completed: bool = false
-var bot_step_failed: bool = false
-var bot_step_last_position: Vector3 = Vector3.ZERO
-var bot_step_stall_ticks: int = 0
-var bot_steps_completed: int = 0
-var bot_row_start_position: Vector3 = Vector3.ZERO
-# Маршрут бота хранится в целочисленных координатах клеток планеты.
-var bot_route_cell: Vector3i = Vector3i(-1, -1, -1)
-var bot_square_forward_delta: Vector3i = Vector3i.ZERO
-var bot_square_right_delta: Vector3i = Vector3i.ZERO
-var bot_return_steps_completed: int = 0
-var bot_row_forward_steps: int = 0
-# Зафиксированный уровень добычи в координатах вокселей планеты.
-var bot_mining_y: int = -1
-var bot_square_row_index: int = 0
-var bot_square_index: int = 0
-# Серверный тик последнего успешно разрушенного ботом блока.
-var bot_last_mine_tick: int = -1000000
-
 # Параметры движения.
 const MOVE_SPEED := 50.0
 const ACCELERATION := 20.0
