@@ -60,6 +60,9 @@ var local_grounded: bool = false
 # Последний полученный серверный тик.
 var last_received_server_tick: int = -1
 
+# Неполные части одного серверного снимка, ожидающие сборки.
+var pending_snapshot_chunks: Dictionary = {}
+
 # Номер физического тика сервера.
 var server_physics_tick: int = 0
 
@@ -74,6 +77,8 @@ var planet: Planet
 
 # Фиксированный шаг сервера согласован с physics_ticks_per_second в project.godot.
 const SERVER_TICK_DELTA: float = 1.0 / 60.0
+const MAX_SNAPSHOT_CHUNK_BYTES: int = 900
+const MAX_SNAPSHOT_CHUNKS: int = 128
 const INPUT_TIMEOUT_TICKS: int = 30
 const MAX_SERVER_INPUT_QUEUE: int = 12
 const MAX_INPUT_SEQUENCE_GAP: int = 120
@@ -893,14 +898,47 @@ func _broadcast_player_states() -> void:
 			"grounded": server_player.grounded
 		}
 
-	# Один общий снимок для всех клиентов.
-	receive_world_snapshot.rpc(states, server_physics_tick)
+	if states.is_empty():
+		return
+
+	# ENet MTU is about 1392 bytes. Keep the serialized state payload
+	# comfortably below it so one lost fragment cannot discard a whole snapshot.
+	var chunks: Array[Dictionary] = []
+	var current_chunk: Dictionary = {}
+
+	for id in states:
+		var candidate_chunk: Dictionary = current_chunk.duplicate()
+		candidate_chunk[id] = states[id]
+
+		if (
+			not current_chunk.is_empty()
+			and var_to_bytes(candidate_chunk).size() > MAX_SNAPSHOT_CHUNK_BYTES
+		):
+			chunks.append(current_chunk)
+			current_chunk = {id: states[id]}
+		else:
+			current_chunk = candidate_chunk
+
+	if not current_chunk.is_empty():
+		chunks.append(current_chunk)
+
+	# All chunks share one server tick. The client applies the snapshot
+	# only after every chunk for that tick has arrived.
+	for chunk_index in range(chunks.size()):
+		receive_world_snapshot.rpc(
+			chunks[chunk_index],
+			server_physics_tick,
+			chunk_index,
+			chunks.size()
+		)
 
 
 @rpc("authority", "call_remote", "unreliable_ordered", 1)
 func receive_world_snapshot(
 	states: Dictionary,
-	server_tick: int
+	server_tick: int,
+	chunk_index: int,
+	chunk_count: int
 ) -> void:
 
 	if multiplayer.is_server():
@@ -909,7 +947,48 @@ func receive_world_snapshot(
 	if server_tick <= last_received_server_tick:
 		return
 
+	if chunk_count < 1 or chunk_count > MAX_SNAPSHOT_CHUNKS:
+		return
+
+	if chunk_index < 0 or chunk_index >= chunk_count:
+		return
+
+	# unreliable_ordered preserves packet order on this channel. Once a newer
+	# tick starts arriving, incomplete older snapshots can no longer be completed.
+	for pending_tick in pending_snapshot_chunks.keys():
+		if int(pending_tick) < server_tick:
+			pending_snapshot_chunks.erase(pending_tick)
+
+	if not pending_snapshot_chunks.has(server_tick):
+		pending_snapshot_chunks[server_tick] = {
+			"chunk_count": chunk_count,
+			"chunks": {},
+			"received_count": 0
+		}
+
+	var assembly: Dictionary = pending_snapshot_chunks[server_tick]
+	if int(assembly["chunk_count"]) != chunk_count:
+		pending_snapshot_chunks.erase(server_tick)
+		return
+
+	var received_chunks: Dictionary = assembly["chunks"]
+	if not received_chunks.has(chunk_index):
+		received_chunks[chunk_index] = states
+		assembly["received_count"] = int(assembly["received_count"]) + 1
+		assembly["chunks"] = received_chunks
+		pending_snapshot_chunks[server_tick] = assembly
+
+	if int(assembly["received_count"]) < chunk_count:
+		return
+
+	var complete_states: Dictionary = {}
+	for chunk in received_chunks.values():
+		for player_id in chunk:
+			complete_states[player_id] = chunk[player_id]
+
+	pending_snapshot_chunks.erase(server_tick)
 	last_received_server_tick = server_tick
+	states = complete_states
 
 	var local_id := multiplayer.get_unique_id()
 
