@@ -47,18 +47,7 @@ var input_queue: Array[Dictionary] = []
 
 var grounded: bool = false
 
-# Bot mining search is spread across physics ticks.
-var bot_last_mine_tick: int = -60
-var bot_search_active: bool = false
-var bot_search_complete: bool = false
-var bot_search_cursor: int = 0
-var bot_search_center_cell: Vector3i = Vector3i.ZERO
-var bot_search_local_position: Vector3 = Vector3.ZERO
-var bot_search_radius: int = 0
-var bot_search_max_distance_squared: float = 0.0
-var bot_search_nearest_cell: Vector3i = Vector3i(-1, -1, -1)
-var bot_search_nearest_distance_squared: float = 0.0
-
+# Bot mining search state is owned by each BotAgent, not by ServerPlayer.
 # Параметры движения.
 const MOVE_SPEED := 50.0
 const ACCELERATION := 20.0
