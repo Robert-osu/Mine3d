@@ -87,26 +87,40 @@ func create_bot_player(requested_name: String = "") -> int:
 	return bot_id
 
 
-# Один раз в секунду ищет ближайший открытый блок вокруг бота и добывает его.
+# Поиск распределяется по физическим тикам; добыча — не чаще раза в секунду.
+# При радиусе 10 сканируется 21^3 = 9261 клетка, по 160 клеток за тик.
 # Бот не задаёт движение и не меняет направление взгляда.
 const BOT_MINE_INTERVAL_SECONDS: float = 1.0
+const BOT_SEARCH_CELLS_PER_TICK: int = 160
 
 
 func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 	bot.move_input = Vector2.ZERO
 	bot.buttons = 0
 
-	var mine_interval_ticks := ceili(BOT_MINE_INTERVAL_SECONDS * Engine.physics_ticks_per_second)
+	if not bot.bot_search_active and not bot.bot_search_complete:
+		_start_block_search(bot, current_planet)
+
+	if bot.bot_search_active:
+		_process_block_search(bot, current_planet)
+
+	if not bot.bot_search_complete:
+		return
+
+	var mine_interval_ticks: int = ceili(
+		BOT_MINE_INTERVAL_SECONDS * Engine.physics_ticks_per_second
+	)
 	if network.server_physics_tick - bot.bot_last_mine_tick < mine_interval_ticks:
 		return
 
-	# Ограничиваем частоту и поиска, даже если поблизости нет блоков.
+	# Даже если блок не найден или уже разрушен другим ботом,
+	# следующая добыча будет разрешена только через секунду.
+	var target_cell: Vector3i = bot.bot_search_nearest_cell
 	bot.bot_last_mine_tick = network.server_physics_tick
+	bot.bot_search_complete = false
 
-	var target_cell := _find_nearest_block(bot, current_planet)
 	if target_cell.x < 0:
 		return
-
 	if not current_planet.destroy_block(target_cell):
 		return
 
@@ -117,39 +131,65 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 	print("BOT MINED BLOCK | ID: %d | CELL: %s" % [bot.peer_id, target_cell])
 
 
-func _find_nearest_block(
-	bot: ServerPlayer,
-	current_planet: Planet
-) -> Vector3i:
+func _start_block_search(bot: ServerPlayer, current_planet: Planet) -> void:
 	var mining_distance: float = float(network.settings.mining_distance)
-	var search_radius: int = ceili(mining_distance)
 	var local_position: Vector3 = current_planet.to_local(bot.position)
-	var center_cell := Vector3i(
+
+	bot.bot_search_local_position = local_position
+	bot.bot_search_radius = ceili(mining_distance)
+	bot.bot_search_center_cell = Vector3i(
 		floori(local_position.x / current_planet.BLOCK_SIZE),
 		floori(local_position.y / current_planet.BLOCK_SIZE),
 		floori(local_position.z / current_planet.BLOCK_SIZE)
 	)
+	bot.bot_search_max_distance_squared = mining_distance * mining_distance
+	bot.bot_search_nearest_distance_squared = bot.bot_search_max_distance_squared
+	bot.bot_search_nearest_cell = Vector3i(-1, -1, -1)
+	bot.bot_search_cursor = 0
+	bot.bot_search_active = true
 
-	var max_distance_squared: float = mining_distance * mining_distance
-	var nearest_cell: Vector3i = Vector3i(-1, -1, -1)
-	var nearest_distance_squared: float = max_distance_squared
 
-	for z in range(center_cell.z - search_radius, center_cell.z + search_radius + 1):
-		for y in range(center_cell.y - search_radius, center_cell.y + search_radius + 1):
-			for x in range(center_cell.x - search_radius, center_cell.x + search_radius + 1):
-				var cell := Vector3i(x, y, z)
-				if not current_planet.is_block_visible(cell):
-					continue
+func _process_block_search(bot: ServerPlayer, current_planet: Planet) -> void:
+	var side: int = bot.bot_search_radius * 2 + 1
+	var total_cells: int = side * side * side
+	var processed: int = 0
+	var center: Vector3i = bot.bot_search_center_cell
+	var origin: Vector3 = bot.bot_search_local_position
+	var block_size: float = current_planet.BLOCK_SIZE
 
-				var block_center := Vector3(cell) + Vector3(0.5, 0.5, 0.5)
-				var distance_squared := local_position.distance_squared_to(block_center)
-				if distance_squared >= nearest_distance_squared:
-					continue
+	while (
+		bot.bot_search_cursor < total_cells
+		and processed < BOT_SEARCH_CELLS_PER_TICK
+	):
+		var cursor: int = bot.bot_search_cursor
+		bot.bot_search_cursor += 1
+		processed += 1
 
-				nearest_distance_squared = distance_squared
-				nearest_cell = cell
+		var x_offset: int = posmod(cursor, side)
+		var y_offset: int = posmod(floori(float(cursor) / float(side)), side)
+		var z_offset: int = floori(float(cursor) / float(side * side))
 
-	return nearest_cell
+		var cell := Vector3i(
+			center.x + x_offset - bot.bot_search_radius,
+			center.y + y_offset - bot.bot_search_radius,
+			center.z + z_offset - bot.bot_search_radius
+		)
+		var block_center: Vector3 = (
+			Vector3(cell) + Vector3(0.5, 0.5, 0.5)
+		) * block_size
+		var distance_squared: float = origin.distance_squared_to(block_center)
+
+		if distance_squared >= bot.bot_search_nearest_distance_squared:
+			continue
+		if not current_planet.is_block_visible(cell):
+			continue
+
+		bot.bot_search_nearest_distance_squared = distance_squared
+		bot.bot_search_nearest_cell = cell
+
+	if bot.bot_search_cursor >= total_cells:
+		bot.bot_search_active = false
+		bot.bot_search_complete = true
 
 
 func spawn_configured_bots_if_needed() -> void:
