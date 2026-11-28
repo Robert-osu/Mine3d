@@ -47,7 +47,6 @@ var input_queue: Array[Dictionary] = []
 
 var grounded: bool = false
 
-# Bot mining search state is owned by each BotAgent, not by ServerPlayer.
 # Параметры движения.
 const MOVE_SPEED := 50.0
 const ACCELERATION := 20.0
