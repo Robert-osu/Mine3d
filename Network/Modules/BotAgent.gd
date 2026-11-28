@@ -44,11 +44,7 @@ func update_search(current_planet: Planet, search_budget: int) -> int:
 
 
 func has_pending_action() -> bool:
-	return (
-		is_instance_valid(player)
-		and search_complete
-		and search_nearest_cell.x >= 0
-	)
+	return is_instance_valid(player) and search_complete
 
 
 func execute_action(current_planet: Planet) -> bool:
@@ -59,6 +55,9 @@ func execute_action(current_planet: Planet) -> bool:
 	var target_cell: Vector3i = search_nearest_cell
 	search_complete = false
 	search_nearest_cell = Vector3i(-1, -1, -1)
+
+	if target_cell.x < 0:
+		return false
 
 	if not current_planet.destroy_block(target_cell):
 		return true
