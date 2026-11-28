@@ -145,7 +145,9 @@ func setup(network_node: Node) -> void:
 # переход на следующий ряд и бесконечное расширение квадратами 32x32.
 const BOT_ROW_LENGTH: int = 32
 const BOT_SQUARE_SIZE: int = 32
-const BOT_STEP_DISTANCE: float = 0.85
+const BOT_STEP_DISTANCE: float = 1.0
+const BOT_STEP_STALL_LIMIT: int = 10
+const BOT_STEP_MOVEMENT_EPSILON: float = 0.001
 const BOT_MIN_MINE_INTERVAL_TICKS: int = 60
 
 const BOT_PHASE_INITIAL_MINE: int = 0
@@ -281,18 +283,41 @@ func _bot_position_changed(
 	return start_position.distance_squared_to(current_position) >= min_distance * min_distance
 
 
-# Проверяет завершение обычного шага по фактическому перемещению.
-func _bot_has_completed_step(bot: ServerPlayer) -> bool:
-	if not _bot_position_changed(
-		bot.bot_step_start_position,
-		bot.position
-	):
+# Выполняет один шаг по зафиксированному направлению взгляда.
+# Вызывается каждый серверный тик: true означает, что один блок пройден.
+# false означает, что шаг ещё выполняется либо движение не удалось.
+func _bot_step_forward(bot: ServerPlayer) -> bool:
+	if not bot.bot_step_active:
+		return bot.bot_step_completed
+
+	var travelled := (
+		bot.position - bot.bot_step_start_position
+	).dot(bot.bot_step_forward)
+
+	if travelled >= BOT_STEP_DISTANCE:
+		bot.move_input = Vector2.ZERO
+		bot.bot_step_active = false
+		bot.bot_step_completed = true
+		return true
+
+	var moved_this_tick := bot.position.distance_to(
+		bot.bot_step_last_position
+	)
+	bot.bot_step_last_position = bot.position
+
+	if moved_this_tick < BOT_STEP_MOVEMENT_EPSILON:
+		bot.bot_step_stall_ticks += 1
+	else:
+		bot.bot_step_stall_ticks = 0
+
+	if bot.bot_step_stall_ticks >= BOT_STEP_STALL_LIMIT:
+		bot.move_input = Vector2.ZERO
+		bot.bot_step_active = false
+		bot.bot_step_failed = true
 		return false
 
-	var travelled := (bot.position - bot.bot_step_start_position).dot(
-		bot.bot_step_forward
-	)
-	return travelled >= BOT_STEP_DISTANCE
+	bot.move_input = Vector2(0.0, -1.0)
+	return false
 
 
 # Добывает блок перед ботом и подтверждает изменение состояния мира.
@@ -367,14 +392,17 @@ func _bot_stop(bot: ServerPlayer, reason: String) -> void:
 
 # Начинает один физический шаг в текущем направлении взгляда/движения.
 func _bot_begin_step(bot: ServerPlayer, phase: int) -> void:
+	# _bot_look_forward задаёт heading как направление взгляда,
+	# спроецированное на касательную плоскость планеты.
 	bot.bot_step_forward = bot.heading.normalized()
 	bot.bot_step_start_position = bot.position
+	bot.bot_step_last_position = bot.position
+	bot.bot_step_stall_ticks = 0
+	bot.bot_step_active = true
+	bot.bot_step_completed = false
+	bot.bot_step_failed = false
 	bot.bot_step_ticks = 0
 	bot.bot_action_phase = phase
-	_bot_step_forward(bot)
-
-
-func _bot_step_forward(bot: ServerPlayer) -> void:
 	bot.move_input = Vector2(0.0, -1.0)
 
 
@@ -508,10 +536,9 @@ func prepare_input(bot: ServerPlayer, current_planet: Planet) -> void:
 		forward = network._get_tangent_fallback(up)
 	bot.heading = forward
 
-	if bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START:
-		_bot_step_forward(bot)
-	elif (
-		bot.bot_action_phase == BOT_PHASE_STEP_FORWARD
+	if (
+		bot.bot_action_phase == BOT_PHASE_RETURN_TO_ROW_START
+		or bot.bot_action_phase == BOT_PHASE_STEP_FORWARD
 		or bot.bot_action_phase == BOT_PHASE_STEP_TO_NEXT_ROW
 	):
 		_bot_step_forward(bot)
@@ -583,12 +610,14 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 
 		BOT_PHASE_STEP_FORWARD, BOT_PHASE_STEP_TO_NEXT_ROW:
 			bot.bot_step_ticks += 1
-			if _bot_has_completed_step(bot):
+			if bot.bot_step_completed:
 				_bot_finish_step(bot, current_planet)
+			elif bot.bot_step_failed:
+				_bot_stop(bot, "FORWARD STEP FAILED: MOVEMENT STOPPED")
 
 		BOT_PHASE_RETURN_TO_ROW_START:
 			bot.bot_step_ticks += 1
-			if _bot_has_completed_step(bot):
+			if bot.bot_step_completed:
 				bot.bot_route_cell -= bot.bot_square_forward_delta
 				bot.bot_return_steps_completed += 1
 				if bot.bot_return_steps_completed >= bot.bot_row_forward_steps:
@@ -601,9 +630,6 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 					_bot_begin_next_row(bot, current_planet)
 				else:
 					# Возвращаемся следующей отдельной клеткой, без наведения на мировую точку.
-					bot.bot_step_start_position = bot.position
-					bot.bot_step_forward = bot.heading.normalized()
-					bot.bot_step_ticks = 0
-					_bot_step_forward(bot)
+					_bot_begin_step(bot, BOT_PHASE_RETURN_TO_ROW_START)
 
 # ============================================================
