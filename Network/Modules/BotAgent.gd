@@ -27,11 +27,9 @@ func _init(bot_player: ServerPlayer, network_node: Node) -> void:
 	network = network_node
 
 
-func update(current_planet: Planet, search_budget: int) -> int:
+func update_search(current_planet: Planet, search_budget: int) -> int:
 	if not is_instance_valid(player) or current_planet == null:
 		return 0
-
-	var processed_cells: int = 0
 
 	player.move_input = Vector2.ZERO
 	player.buttons = 0
@@ -40,34 +38,37 @@ func update(current_planet: Planet, search_budget: int) -> int:
 		_start_block_search(current_planet)
 
 	if search_active and search_budget > 0:
-		processed_cells = _process_block_search(current_planet, search_budget)
+		return _process_block_search(current_planet, search_budget)
 
-	if not search_complete:
-		return processed_cells
+	return 0
 
-	var mine_interval_ticks: int = ceili(
-		MINE_INTERVAL_SECONDS * Engine.physics_ticks_per_second
+
+func has_pending_action() -> bool:
+	return (
+		is_instance_valid(player)
+		and search_complete
+		and search_nearest_cell.x >= 0
 	)
-	if network.server_physics_tick - last_mine_tick < mine_interval_ticks:
-		return processed_cells
 
-	# Следующая попытка добычи разрешается не раньше чем через секунду,
-	# даже если цель уже разрушена или не найдена.
+
+func execute_action(current_planet: Planet) -> bool:
+	if not has_pending_action() or current_planet == null:
+		search_complete = false
+		return false
+
 	var target_cell: Vector3i = search_nearest_cell
-	last_mine_tick = network.server_physics_tick
 	search_complete = false
+	search_nearest_cell = Vector3i(-1, -1, -1)
 
-	if target_cell.x < 0:
-		return processed_cells
 	if not current_planet.destroy_block(target_cell):
-		return processed_cells
+		return true
 
 	if is_instance_valid(network.world_network):
 		network.world_network.queue_mined_cell(target_cell)
 
 	network.receive_block_destroyed.rpc(target_cell)
 	print("BOT MINED BLOCK | ID: %d | CELL: %s" % [player.peer_id, target_cell])
-	return processed_cells
+	return true
 
 
 func _start_block_search(current_planet: Planet) -> void:
