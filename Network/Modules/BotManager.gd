@@ -103,7 +103,13 @@ func update_agents(current_planet: Planet) -> void:
 	var agent_count: int = agent_ids.size()
 	var per_agent_budget: int = mini(
 		BotAgent.SEARCH_CELLS_PER_TICK,
-		mini(160, maxi(1, GLOBAL_SEARCH_CELLS_PER_TICK / agent_count))
+		mini(
+		160,
+		maxi(
+			1,
+			floori(float(GLOBAL_SEARCH_CELLS_PER_TICK) / float(agent_count))
+		)
+	)
 	)
 
 	# Поворачиваем порядок обхода, чтобы остаточная нагрузка не закреплялась
