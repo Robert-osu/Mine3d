@@ -8,6 +8,9 @@ const MAX_CONFIGURED_BOTS: int = 32
 
 var network: Node
 var agents: Dictionary = {}
+var next_agent_index: int = 0
+
+const GLOBAL_SEARCH_CELLS_PER_TICK: int = 320
 var next_bot_id: int = BOT_ID_START
 var configured_bot_count: int = 0
 var configured_bots_spawned: bool = false
@@ -90,12 +93,33 @@ func create_bot_player(requested_name: String = "") -> int:
 	return bot_id
 
 
-func update_agent(bot: ServerPlayer, current_planet: Planet) -> void:
-	if not agents.has(bot.peer_id):
-		agents[bot.peer_id] = BotAgent.new(bot, network)
+func update_agents(current_planet: Planet) -> void:
+	if agents.is_empty() or current_planet == null:
+		return
 
-	var agent: BotAgent = agents[bot.peer_id]
-	agent.update(current_planet)
+	var agent_ids: Array = agents.keys()
+	agent_ids.sort()
+
+	var agent_count: int = agent_ids.size()
+	var per_agent_budget: int = mini(
+		BotAgent.SEARCH_CELLS_PER_TICK,
+		mini(160, maxi(1, GLOBAL_SEARCH_CELLS_PER_TICK / agent_count))
+	)
+
+	# Поворачиваем порядок обхода, чтобы остаточная нагрузка не закреплялась
+	# за одним и тем же ботом при нечётном количестве агентов.
+	var start_index: int = posmod(next_agent_index, agent_count)
+	next_agent_index = (start_index + 1) % agent_count
+
+	for offset in range(agent_count):
+		var index: int = (start_index + offset) % agent_count
+		var bot_id: int = int(agent_ids[index])
+		if not network.server_players.has(bot_id):
+			agents.erase(bot_id)
+			continue
+
+		var agent: BotAgent = agents[bot_id]
+		agent.update(current_planet, per_agent_budget)
 
 
 func remove_agent(player_id: int) -> void:
