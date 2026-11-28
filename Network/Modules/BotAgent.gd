@@ -4,13 +4,11 @@ class_name BotAgent
 # Независимое состояние и поведение одного бота.
 # Физика и репликация остаются в Network/ServerPlayer.
 
-const MINE_INTERVAL_SECONDS: float = 1.0
 const SEARCH_CELLS_PER_TICK: int = 160
 
 var network: Node
 var player: ServerPlayer
 
-var last_mine_tick: int = -60
 var search_active: bool = false
 var search_complete: bool = false
 var search_cursor: int = 0
