@@ -573,6 +573,7 @@ func _cleanup_client_connection() -> void:
 	local_previous_buttons = 0
 	local_grounded = false
 	last_received_server_tick = -1
+	pending_snapshot_chunks.clear()
 	correction_offset = Vector3.ZERO
 
 	# Старые состояния игроков не должны пережить разрыв соединения.
