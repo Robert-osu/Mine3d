@@ -47,6 +47,9 @@ var input_queue: Array[Dictionary] = []
 
 var grounded: bool = false
 
+# Server tick of the last successful bot mining action.
+var bot_last_mine_tick: int = -60
+
 # Параметры движения.
 const MOVE_SPEED := 50.0
 const ACCELERATION := 20.0
