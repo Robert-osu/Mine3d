@@ -6,8 +6,17 @@ class_name BotAgent
 
 const SEARCH_CELLS_PER_TICK: int = 160
 
+enum ActionState {
+	IDLE,
+	EXECUTING,
+	COMPLETED
+}
+
 var network: Node
 var player: ServerPlayer
+
+var action_state: ActionState = ActionState.IDLE
+var action_target_cell: Vector3i = Vector3i(-1, -1, -1)
 
 var search_active: bool = false
 var search_complete: bool = false
@@ -42,30 +51,65 @@ func update_search(current_planet: Planet, search_budget: int) -> int:
 
 
 func has_pending_action() -> bool:
-	return is_instance_valid(player) and search_complete
+	return (
+		is_instance_valid(player)
+		and search_complete
+		and action_state == ActionState.IDLE
+	)
 
 
-func execute_action(current_planet: Planet) -> bool:
-	if not has_pending_action() or current_planet == null:
-		search_complete = false
+func begin_action() -> bool:
+	if not has_pending_action():
 		return false
 
-	var target_cell: Vector3i = search_nearest_cell
+	action_target_cell = search_nearest_cell
+	if action_target_cell.x < 0:
+		search_complete = false
+		search_nearest_cell = Vector3i(-1, -1, -1)
+		return false
+
+	action_state = ActionState.EXECUTING
+	print("BOT ACTION | STARTED | ID: %d | CELL: %s" % [
+		player.peer_id,
+		action_target_cell
+	])
+	return true
+
+
+func complete_action(current_planet: Planet) -> void:
+	if action_state != ActionState.EXECUTING:
+		return
+
+	action_state = ActionState.COMPLETED
+	var target_cell: Vector3i = action_target_cell
+	action_target_cell = Vector3i(-1, -1, -1)
 	search_complete = false
 	search_nearest_cell = Vector3i(-1, -1, -1)
 
-	if target_cell.x < 0:
-		return false
+	if (
+		is_instance_valid(player)
+		and current_planet != null
+		and current_planet.destroy_block(target_cell)
+	):
+		if is_instance_valid(network.world_network):
+			network.world_network.queue_mined_cell(target_cell)
 
-	if not current_planet.destroy_block(target_cell):
-		return true
+		network.receive_block_destroyed.rpc(target_cell)
+		print("BOT MINED BLOCK | ID: %d | CELL: %s" % [player.peer_id, target_cell])
+	else:
+		print("BOT ACTION | FAILED | ID: %d | CELL: %s" % [
+			player.peer_id,
+			target_cell
+		])
 
-	if is_instance_valid(network.world_network):
-		network.world_network.queue_mined_cell(target_cell)
+	action_state = ActionState.IDLE
 
-	network.receive_block_destroyed.rpc(target_cell)
-	print("BOT MINED BLOCK | ID: %d | CELL: %s" % [player.peer_id, target_cell])
-	return true
+
+func cancel_action() -> void:
+	action_target_cell = Vector3i(-1, -1, -1)
+	action_state = ActionState.IDLE
+	search_complete = false
+	search_nearest_cell = Vector3i(-1, -1, -1)
 
 
 func _start_block_search(current_planet: Planet) -> void:
