@@ -27,9 +27,11 @@ func _init(bot_player: ServerPlayer, network_node: Node) -> void:
 	network = network_node
 
 
-func update(current_planet: Planet) -> void:
+func update(current_planet: Planet, search_budget: int) -> int:
 	if not is_instance_valid(player) or current_planet == null:
-		return
+		return 0
+
+	var processed_cells: int = 0
 
 	player.move_input = Vector2.ZERO
 	player.buttons = 0
@@ -37,17 +39,17 @@ func update(current_planet: Planet) -> void:
 	if not search_active and not search_complete:
 		_start_block_search(current_planet)
 
-	if search_active:
-		_process_block_search(current_planet)
+	if search_active and search_budget > 0:
+		processed_cells = _process_block_search(current_planet, search_budget)
 
 	if not search_complete:
-		return
+		return processed_cells
 
 	var mine_interval_ticks: int = ceili(
 		MINE_INTERVAL_SECONDS * Engine.physics_ticks_per_second
 	)
 	if network.server_physics_tick - last_mine_tick < mine_interval_ticks:
-		return
+		return processed_cells
 
 	# Следующая попытка добычи разрешается не раньше чем через секунду,
 	# даже если цель уже разрушена или не найдена.
@@ -56,15 +58,16 @@ func update(current_planet: Planet) -> void:
 	search_complete = false
 
 	if target_cell.x < 0:
-		return
+		return processed_cells
 	if not current_planet.destroy_block(target_cell):
-		return
+		return processed_cells
 
 	if is_instance_valid(network.world_network):
 		network.world_network.queue_mined_cell(target_cell)
 
 	network.receive_block_destroyed.rpc(target_cell)
 	print("BOT MINED BLOCK | ID: %d | CELL: %s" % [player.peer_id, target_cell])
+	return processed_cells
 
 
 func _start_block_search(current_planet: Planet) -> void:
@@ -85,7 +88,7 @@ func _start_block_search(current_planet: Planet) -> void:
 	search_active = true
 
 
-func _process_block_search(current_planet: Planet) -> void:
+func _process_block_search(current_planet: Planet, search_budget: int) -> int:
 	var side: int = search_radius * 2 + 1
 	var total_cells: int = side * side * side
 	var processed: int = 0
@@ -95,7 +98,7 @@ func _process_block_search(current_planet: Planet) -> void:
 
 	while (
 		search_cursor < total_cells
-		and processed < SEARCH_CELLS_PER_TICK
+		and processed < mini(search_budget, SEARCH_CELLS_PER_TICK)
 	):
 		var cursor: int = search_cursor
 		search_cursor += 1
@@ -126,3 +129,5 @@ func _process_block_search(current_planet: Planet) -> void:
 	if search_cursor >= total_cells:
 		search_active = false
 		search_complete = true
+
+	return processed
