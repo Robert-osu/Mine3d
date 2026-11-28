@@ -87,6 +87,71 @@ func create_bot_player(requested_name: String = "") -> int:
 	return bot_id
 
 
+# Один раз в секунду ищет ближайший открытый блок вокруг бота и добывает его.
+# Бот не задаёт движение и не меняет направление взгляда.
+const BOT_MINE_INTERVAL_TICKS: int = 60
+
+
+func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
+	bot.move_input = Vector2.ZERO
+	bot.buttons = 0
+
+	if network.server_physics_tick - bot.bot_last_mine_tick < BOT_MINE_INTERVAL_TICKS:
+		return
+
+	var target_cell := _find_nearest_block(bot, current_planet)
+	if target_cell.x < 0:
+		return
+
+	if not current_planet.destroy_block(target_cell):
+		return
+
+	bot.bot_last_mine_tick = network.server_physics_tick
+
+	if is_instance_valid(network.world_network):
+		network.world_network.queue_mined_cell(target_cell)
+
+	network.receive_block_destroyed.rpc(target_cell)
+	print("BOT MINED BLOCK | ID: %d | CELL: %s" % [bot.peer_id, target_cell])
+
+
+func _find_nearest_block(
+	bot: ServerPlayer,
+	current_planet: Planet
+) -> Vector3i:
+	var search_radius := int(ceil(network.settings.mining_distance))
+	var local_position := current_planet.to_local(bot.position)
+	var center_cell := Vector3i(
+		floori(local_position.x / current_planet.BLOCK_SIZE),
+		floori(local_position.y / current_planet.BLOCK_SIZE),
+		floori(local_position.z / current_planet.BLOCK_SIZE)
+	)
+
+	var max_distance_squared := (
+		network.settings.mining_distance
+		* network.settings.mining_distance
+	)
+	var nearest_cell := Vector3i(-1, -1, -1)
+	var nearest_distance_squared := max_distance_squared
+
+	for z in range(center_cell.z - search_radius, center_cell.z + search_radius + 1):
+		for y in range(center_cell.y - search_radius, center_cell.y + search_radius + 1):
+			for x in range(center_cell.x - search_radius, center_cell.x + search_radius + 1):
+				var cell := Vector3i(x, y, z)
+				if not current_planet.is_block_visible(cell):
+					continue
+
+				var block_center := Vector3(cell) + Vector3(0.5, 0.5, 0.5)
+				var distance_squared := local_position.distance_squared_to(block_center)
+				if distance_squared >= nearest_distance_squared:
+					continue
+
+				nearest_distance_squared = distance_squared
+				nearest_cell = cell
+
+	return nearest_cell
+
+
 func spawn_configured_bots_if_needed() -> void:
 	if configured_bots_spawned:
 		return
