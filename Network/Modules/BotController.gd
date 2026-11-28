@@ -99,14 +99,15 @@ func update_actions(bot: ServerPlayer, current_planet: Planet) -> void:
 	if network.server_physics_tick - bot.bot_last_mine_tick < BOT_MINE_INTERVAL_TICKS:
 		return
 
+	# Ограничиваем частоту и поиска, даже если поблизости нет блоков.
+	bot.bot_last_mine_tick = network.server_physics_tick
+
 	var target_cell := _find_nearest_block(bot, current_planet)
 	if target_cell.x < 0:
 		return
 
 	if not current_planet.destroy_block(target_cell):
 		return
-
-	bot.bot_last_mine_tick = network.server_physics_tick
 
 	if is_instance_valid(network.world_network):
 		network.world_network.queue_mined_cell(target_cell)
