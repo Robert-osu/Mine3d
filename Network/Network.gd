@@ -470,18 +470,6 @@ func _simulate_server_player(
 		server_player.input_queue.clear()
 		return
 
-	# Бот формирует собственный input перед обычной серверной физикой.
-	if server_player.is_bot:
-		bot_controller.prepare_input(server_player, current_planet)
-
-	# Сохраняем ориентацию бота, пока общий симулятор обновляет движение.
-	var bot_orientation: Dictionary = {}
-	if server_player.is_bot:
-		bot_orientation = bot_controller.capture_orientation(
-			server_player,
-			current_planet
-		)
-
 	# Время симуляции задаёт серверный physics tick, а не клиентский пакет.
 	var result := _simulate_movement(
 		current_planet,
@@ -499,18 +487,7 @@ func _simulate_server_player(
 	server_player.heading = result["heading"]
 	server_player.grounded = result["grounded"]
 
-	if server_player.is_bot:
-		bot_controller.restore_orientation(
-			server_player,
-			current_planet,
-			bot_orientation
-		)
-
 	server_player.finish_tick()
-
-	if server_player.is_bot:
-		bot_controller.update_actions(server_player, current_planet)
-		return
 
 	# Добываем после применения состояния из input, содержащего удар.
 	var mine_requests: int = int(input_frame.get("mine_requests", 0))
