@@ -916,7 +916,8 @@ func _broadcast_player_states() -> void:
 			and var_to_bytes(candidate_chunk).size() > MAX_SNAPSHOT_CHUNK_BYTES
 		):
 			chunks.append(current_chunk)
-			current_chunk = {id: states[id]}
+			current_chunk = {}
+			current_chunk[id] = states[id]
 		else:
 			current_chunk = candidate_chunk
 
