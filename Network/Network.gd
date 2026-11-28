@@ -436,6 +436,10 @@ func _server_physics_process(_delta: float) -> void:
 			SERVER_TICK_DELTA
 		)
 
+	# Поведение всех ботов обновляется отдельно от симуляции игроков.
+	# Менеджер делит общий бюджет поиска между независимыми агентами.
+	bot_manager.update_agents(current_planet)
+
 	# Отправляем состояния 20 раз в секунду.
 	if snapshot_counter >= settings.snapshot_interval:
 		snapshot_counter = 0
@@ -491,7 +495,6 @@ func _simulate_server_player(
 	server_player.finish_tick()
 
 	if server_player.is_bot:
-		bot_manager.update_agent(server_player, current_planet)
 		return
 
 	# Добываем после применения состояния из input, содержащего удар.
